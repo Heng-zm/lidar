@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Matrix LiDAR Text Scanner</title>
+    <title>Matrix LiDAR (Optimized)</title>
     <style>
         body {
             background-color: #000;
@@ -12,12 +12,21 @@
             font-family: 'Courier New', monospace;
             touch-action: none;
             user-select: none;
+            -webkit-tap-highlight-color: transparent;
         }
 
         canvas {
             display: block;
             width: 100vw;
             height: 100vh;
+        }
+
+        /* Debug Stats */
+        #stats {
+            position: absolute; top: 5px; left: 5px;
+            color: #0f0; font-size: 10px; font-weight: bold;
+            pointer-events: none; text-shadow: 1px 1px 0 #000;
+            z-index: 20;
         }
 
         /* UI Panel */
@@ -27,56 +36,64 @@
             left: 50%;
             transform: translateX(-50%);
             width: 95%;
-            max-width: 550px;
-            background: rgba(0, 20, 0, 0.9);
-            border: 1px solid #0f0;
-            padding: 15px;
-            border-radius: 16px;
+            max-width: 500px;
+            background: rgba(0, 15, 0, 0.92);
+            border: 1px solid #0a0;
+            padding: 12px;
+            border-radius: 12px;
             z-index: 100;
             display: flex;
             flex-direction: column;
-            gap: 12px;
-            backdrop-filter: blur(8px);
+            gap: 10px;
+            backdrop-filter: blur(5px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            transition: opacity 0.3s ease;
         }
 
         .ui-hidden { opacity: 0; pointer-events: none; }
 
-        /* Row 1: Buttons */
-        .row-top { display: flex; gap: 8px; height: 44px; }
+        /* Buttons */
+        .row-top { display: flex; gap: 8px; height: 42px; }
 
         button {
-            border: 1px solid #0f0;
-            border-radius: 8px;
+            border: 1px solid #0a0;
+            border-radius: 6px;
             font-weight: 700;
-            font-size: 12px;
+            font-size: 11px;
             cursor: pointer;
             text-transform: uppercase;
             background: #000;
             color: #0f0;
+            flex: 1;
+            transition: background 0.2s;
         }
-        button.active { background: #0f0; color: #000; }
+        button:active { background: #0f0; color: #000; }
+        
+        #btnMode { flex: 1.5; color: #0ff; border-color: #088; }
+        #btnSnap { flex: 0.6; font-size: 18px; }
 
-        #btnMode { flex: 2; border-color: #0ff; color: #0ff; }
-
-        /* Row 2: Dropdown */
+        /* Dropdown */
         .row-select { display: flex; }
         select {
-            width: 100%; padding: 10px;
-            background: #000; color: #0f0;
-            border: 1px solid #0f0;
-            border-radius: 8px; font-family: monospace;
+            width: 100%; padding: 8px;
+            background: #050505; color: #0f0;
+            border: 1px solid #0a0;
+            border-radius: 6px; font-family: monospace; font-size: 12px;
+            outline: none;
         }
 
-        /* Row 3: Sliders */
+        /* Sliders */
         .row-sliders { display: flex; gap: 15px; }
         .slider-group { flex: 1; display: flex; flex-direction: column; }
-        label { color: #0f0; font-size: 10px; font-weight: bold; margin-bottom: 4px; }
-        input[type=range] { width: 100%; accent-color: #0f0; }
+        label { color: #0a0; font-size: 9px; font-weight: bold; margin-bottom: 3px; letter-spacing: 1px; }
+        input[type=range] { width: 100%; accent-color: #0f0; height: 4px; }
 
         video { display: none; }
     </style>
 </head>
 <body>
+
+    <div id="stats">FPS: 0</div>
 
     <div class="ui-container" id="ui">
         <div class="row-top">
@@ -88,7 +105,6 @@
 
         <div class="row-select">
             <select id="charSelect">
-                <!-- NEW OPTION ADDED HERE -->
                 <option value="dots">Dots (....)</option>
                 <option value="khmer">Khmer (ខ្មែរ)</option>
                 <option value="matrix">Matrix (ﾊﾐﾋｰｳ)</option>
@@ -100,11 +116,11 @@
         <div class="row-sliders">
             <div class="slider-group">
                 <label>DENSITY</label>
-                <input type="range" id="resolution" min="30" max="150" value="80">
+                <input type="range" id="resolution" min="30" max="140" value="70">
             </div>
             <div class="slider-group">
                 <label>SENSITIVITY</label>
-                <input type="range" id="threshold" min="5" max="100" value="25">
+                <input type="range" id="threshold" min="5" max="80" value="20">
             </div>
         </div>
     </div>
@@ -113,10 +129,13 @@
     <canvas id="canvas"></canvas>
 
     <script>
+        // --- CACHE DOM ELEMENTS ---
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d', { alpha: false }); 
+        // alpha: false improves performance by ignoring transparency buffer
+        const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true }); 
         const ui = document.getElementById('ui');
+        const stats = document.getElementById('stats');
         
         const btnStart = document.getElementById('btnStart');
         const btnSwitch = document.getElementById('btnSwitch');
@@ -127,47 +146,65 @@
         const sliderThresh = document.getElementById('threshold');
         const charSelect = document.getElementById('charSelect');
 
+        // Reuse single temp canvas instance
         const tempCanvas = document.createElement('canvas');
         const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true }); 
 
         const CHAR_SETS = {
-            // NEW CHARACTER SET
-            // Starts with a space (empty) so dark pixels are hidden
-            // Then dots increasing in visual weight
             dots: " .:", 
-            
             standard: ".:-=+*#%@",
             binary: "01",
             matrix: "ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ",
             khmer: "។៕៖ៗ៘៙៚៛ៜ៝កខគឃងចឆជឈញដឋឌឍណតថទធនបផពភមយរលវសហឡអាិីឹឺុូួើឿៀេែៃោៅឣឤឥឦឧឨឩឪឳឲឱឰឯឮឭឬឫំះំ"
         };
 
-        // Default to dots since that was requested
+        // State Variables
         let currentGlyphs = CHAR_SETS.dots;
-        
         let streaming = false;
         let animationId;
         let useFrontCamera = false;
         let isScannerMode = false;
+        let lastFontSize = 0;
+        let lastColor = "";
+        
+        // FPS Calc
+        let lastFrameTime = 0;
+        let frameCount = 0;
 
-        // --- CAMERA ---
+        // --- CAMERA CONTROLS ---
+
         async function startCamera() {
-            stopCamera(false);
+            // Ensure clean state
+            if(streaming) stopCamera(false);
+
             const constraints = {
                 video: {
                     facingMode: useFrontCamera ? "user" : "environment",
-                    width: { ideal: 640 }, height: { ideal: 480 }
+                    width: { ideal: 640 }, // Keep source res low for speed
+                    height: { ideal: 480 }
                 }
             };
+
             try {
                 const stream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = stream;
-                await video.play();
-                streaming = true;
-                btnStart.innerText = "STOP";
-                btnStart.classList.add("active");
-                loop();
+                
+                // Wait for video to be ready before starting loop
+                video.onloadedmetadata = () => {
+                    video.play();
+                    streaming = true;
+                    btnStart.innerText = "STOP";
+                    btnStart.classList.add("active");
+                    
+                    // Use modern Frame Callback if available, else fallback
+                    if ('requestVideoFrameCallback' in video) {
+                        video.requestVideoFrameCallback(onVideoFrame);
+                    } else {
+                        loop();
+                    }
+                };
             } catch (err) {
+                console.error(err);
                 alert("Camera Error: " + err.name);
             }
         }
@@ -175,26 +212,56 @@
         function stopCamera(clearScreen = true) {
             streaming = false;
             cancelAnimationFrame(animationId);
+            
             if (video.srcObject) {
-                video.srcObject.getTracks().forEach(track => track.stop());
+                const tracks = video.srcObject.getTracks();
+                tracks.forEach(track => track.stop());
                 video.srcObject = null;
             }
+            
             if (clearScreen) {
                 btnStart.innerText = "START";
                 btnStart.classList.remove("active");
                 ctx.fillStyle = "black";
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
+                stats.innerText = "FPS: 0";
             }
         }
 
-        // --- LOOP ---
-        function loop() {
-            if (!streaming) return;
+        // --- PROCESSING LOOPS ---
 
-            // Resize
+        // 1. Modern Browser Loop (Synced to Camera Hertz)
+        function onVideoFrame(now, metadata) {
+            if (!streaming) return;
+            processFrame();
+            // Re-register callback
+            video.requestVideoFrameCallback(onVideoFrame);
+        }
+
+        // 2. Fallback Loop (Standard RAF)
+        function loop(now) {
+            if (!streaming) return;
+            processFrame();
+            animationId = requestAnimationFrame(loop);
+        }
+
+        // --- CORE LOGIC ---
+
+        function processFrame() {
+            // FPS Counter
+            frameCount++;
+            const now = performance.now();
+            if (now - lastFrameTime >= 1000) {
+                stats.innerText = `FPS: ${frameCount}`;
+                frameCount = 0;
+                lastFrameTime = now;
+            }
+
+            // A. Resize Logic (Only run if changed)
             if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
                 canvas.width = window.innerWidth;
                 canvas.height = window.innerHeight;
+                lastFontSize = 0; // Force font reset
             }
             const w = canvas.width;
             const h = canvas.height;
@@ -202,8 +269,9 @@
             const resVal = parseInt(sliderRes.value);
             const thresholdVal = parseInt(sliderThresh.value);
 
-            // Grid
-            const fontSize = Math.max(6, w / resVal); 
+            // B. Grid Calculation
+            // Bitwise OR 0 is faster floor
+            const fontSize = Math.max(6, (w / resVal) | 0); 
             const cols = Math.ceil(w / fontSize);
             const rows = Math.ceil(h / (fontSize * 0.8));
 
@@ -212,7 +280,8 @@
                 tempCanvas.height = rows;
             }
 
-            // Draw Video
+            // C. Draw Video to Temp Canvas (Downsampling)
+            // Mirror logic inside drawImage using context transforms
             if (useFrontCamera) {
                 tempCtx.save();
                 tempCtx.translate(cols, 0);
@@ -225,78 +294,95 @@
 
             const frame = tempCtx.getImageData(0, 0, cols, rows).data;
 
-            // Clear Screen
+            // D. Render Setup
             ctx.fillStyle = "black";
             ctx.fillRect(0, 0, w, h);
 
-            // Font
-            // Check if Khmer to use fallback font
-            if(charSelect.value === 'khmer') {
-                ctx.font = `bold ${fontSize}px 'Khmer OS System', 'Courier New', monospace`;
-            } else {
-                ctx.font = `bold ${fontSize}px monospace`;
+            // Set Font (Only if changed - HUGE performance saver)
+            if (fontSize !== lastFontSize) {
+                const fontName = (charSelect.value === 'khmer') ? "'Khmer OS System', monospace" : "monospace";
+                ctx.font = `bold ${fontSize}px ${fontName}`;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                lastFontSize = fontSize;
             }
-            
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
 
+            const glyphLen = currentGlyphs.length - 1;
+
+            // E. The Pixel Loop
             for (let y = 0; y < rows; y++) {
+                // Optimization: Pre-calculate Y offset
+                const rowOffset = y * cols;
+                const yPos = y * (fontSize * 0.8) + (fontSize >> 1);
+
                 for (let x = 0; x < cols; x++) {
+                    const i = (rowOffset + x) << 2; // Equivalent to * 4
                     
-                    const i = (y * cols + x) * 4;
-                    const r = frame[i]; const g = frame[i+1]; const b = frame[i+2];
-                    const brightness = (r + g + b) / 3;
+                    // Fast Brightness (Average)
+                    const brightness = (frame[i] + frame[i+1] + frame[i+2]) / 3;
 
                     let shouldDraw = false;
-                    let charColor = "#0f0";
+                    let targetColor = "";
 
                     if (isScannerMode) {
-                        // SCANNER ALGORITHM (Edge)
+                        // --- SCANNER MODE (Edge Detection) ---
+                        // Only check right neighbor if not last column
                         if (x < cols - 1) {
-                            const iRight = (y * cols + (x + 1)) * 4;
+                            const iRight = i + 4;
                             const bRight = (frame[iRight] + frame[iRight+1] + frame[iRight+2]) / 3;
-                            const diff = Math.abs(brightness - bRight);
+                            
+                            // Math.abs replacement
+                            let diff = brightness - bRight;
+                            if (diff < 0) diff = -diff;
 
                             if (diff > thresholdVal) {
                                 shouldDraw = true;
-                                charColor = "#aff"; 
+                                targetColor = "#aff"; // Cyan for edges
                             }
                         }
                     } else {
-                        // NORMAL MODE
+                        // --- NORMAL MODE ---
                         if (brightness > 30) {
                             shouldDraw = true;
-                            const gVal = Math.min(255, brightness + 50);
-                            charColor = `rgb(0, ${gVal}, 0)`;
+                            // Dynamic Green Intensity
+                            // Use cached strings or simple rgb construction
+                            // Optimization: Just use a fixed green for speed or dynamic
+                            // For max speed, use fixed, but dynamic looks better.
+                            const gVal = (brightness + 50) | 0;
+                            // Clamp to 255
+                            const finalG = gVal > 255 ? 255 : gVal;
+                            targetColor = `rgb(0, ${finalG}, 0)`;
                         }
                     }
 
                     if (shouldDraw) {
+                        // Calc Glyph Index
                         let charIdx;
                         if(isScannerMode) {
-                             charIdx = Math.floor(Math.random() * currentGlyphs.length);
+                             // Random jitter for scanner noise
+                             charIdx = (Math.random() * glyphLen) | 0;
                         } else {
-                             charIdx = Math.floor((brightness / 255) * (currentGlyphs.length - 1));
+                             charIdx = ((brightness / 255) * glyphLen) | 0;
                         }
                         
-                        const safeIdx = Math.max(0, Math.min(currentGlyphs.length - 1, charIdx));
+                        // State Cache Check: Don't change context color if not needed
+                        if (targetColor !== lastColor) {
+                            ctx.fillStyle = targetColor;
+                            lastColor = targetColor;
+                        }
                         
-                        ctx.fillStyle = charColor;
-                        ctx.fillText(
-                            currentGlyphs[safeIdx], 
-                            x * fontSize + (fontSize/2), 
-                            y * (fontSize * 0.8) + (fontSize/2)
-                        );
+                        const xPos = x * fontSize + (fontSize >> 1);
+                        ctx.fillText(currentGlyphs[charIdx], xPos, yPos);
                     }
                 }
             }
-
-            animationId = requestAnimationFrame(loop);
         }
 
-        // --- EVENTS ---
+        // --- EVENT HANDLERS ---
+
         charSelect.addEventListener('change', (e) => {
             currentGlyphs = CHAR_SETS[e.target.value];
+            lastFontSize = 0; // Force font update
         });
 
         btnMode.addEventListener('click', () => {
@@ -312,7 +398,10 @@
             }
         });
 
-        btnStart.addEventListener('click', () => streaming ? stopCamera() : startCamera());
+        btnStart.addEventListener('click', () => {
+            if(streaming) stopCamera();
+            else startCamera();
+        });
         
         btnSwitch.addEventListener('click', () => {
             if (!streaming) return;
@@ -322,11 +411,12 @@
 
         btnSnap.addEventListener('click', () => {
             const link = document.createElement('a');
-            link.download = `scan_${Date.now()}.png`;
+            link.download = `matrix_scan_${Date.now()}.png`;
             link.href = canvas.toDataURL('image/png');
             link.click();
         });
 
+        // Hide UI on click outside
         document.body.addEventListener('click', (e) => {
             if (!e.target.closest('.ui-container')) {
                 ui.classList.toggle('ui-hidden');
