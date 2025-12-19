@@ -2,233 +2,330 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Structure Edge Scanner</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Matrix LiDAR Text Scanner</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; color: #0f0; }
-        
-        #ui {
-            position: absolute; top: 0; left: 0; width: 100%;
-            background: linear-gradient(to bottom, rgba(0,20,0,1), transparent);
-            padding: 20px;
-            pointer-events: none;
-            z-index: 10;
+        body {
+            background-color: #000;
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+            touch-action: none;
+            user-select: none;
         }
 
-        h1 { margin: 0; font-size: 16px; letter-spacing: 2px; }
-        p { margin: 5px 0 0 0; font-size: 10px; color: #6f6; }
-
-        /* Scanning overlay effect */
-        #scan-overlay {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 1px,
-                rgba(0, 50, 0, 0.2) 2px,
-                rgba(0, 50, 0, 0.2) 4px
-            );
-            pointer-events: none;
-            z-index: 5;
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
         }
 
-        #video { display: none; }
+        /* UI Panel */
+        .ui-container {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 95%;
+            max-width: 550px;
+            background: rgba(0, 20, 0, 0.9);
+            border: 1px solid #0f0;
+            padding: 15px;
+            border-radius: 16px;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            backdrop-filter: blur(8px);
+        }
+
+        .ui-hidden { opacity: 0; pointer-events: none; }
+
+        /* Row 1: Buttons */
+        .row-top { display: flex; gap: 8px; height: 44px; }
+
+        button {
+            border: 1px solid #0f0;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 12px;
+            cursor: pointer;
+            text-transform: uppercase;
+            background: #000;
+            color: #0f0;
+        }
+        button.active { background: #0f0; color: #000; }
+
+        #btnMode { flex: 2; border-color: #0ff; color: #0ff; }
+
+        /* Row 2: Dropdown */
+        .row-select { display: flex; }
+        select {
+            width: 100%; padding: 10px;
+            background: #000; color: #0f0;
+            border: 1px solid #0f0;
+            border-radius: 8px; font-family: monospace;
+        }
+
+        /* Row 3: Sliders */
+        .row-sliders { display: flex; gap: 15px; }
+        .slider-group { flex: 1; display: flex; flex-direction: column; }
+        label { color: #0f0; font-size: 10px; font-weight: bold; margin-bottom: 4px; }
+        input[type=range] { width: 100%; accent-color: #0f0; }
+
+        video { display: none; }
     </style>
-    <!-- Import Three.js -->
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-            }
-        }
-    </script>
 </head>
 <body>
 
-    <div id="ui">
-        <h1>STRUCTURE SCANNER</h1>
-        <p>ALGORITHM: SOBEL EDGE DETECTION</p>
-        <p>STATUS: EXTRACTING GEOMETRY...</p>
+    <div class="ui-container" id="ui">
+        <div class="row-top">
+            <button id="btnStart">START</button>
+            <button id="btnSwitch">↻</button>
+            <!-- NEW BUTTON FOR EDGE DETECTION -->
+            <button id="btnMode">MODE: NORMAL</button> 
+            <button id="btnSnap">📷</button>
+        </div>
+
+        <div class="row-select">
+            <select id="charSelect">
+                <option value="khmer">Khmer (ខ្មែរ)</option>
+                <option value="matrix">Matrix (ﾊﾐﾋｰｳ)</option>
+                <option value="binary">Binary (0101)</option>
+                <option value="standard">Standard (.:-=+@)</option>
+            </select>
+        </div>
+
+        <div class="row-sliders">
+            <div class="slider-group">
+                <label>DENSITY</label>
+                <input type="range" id="resolution" min="30" max="150" value="80">
+            </div>
+            <div class="slider-group">
+                <label>SENSITIVITY</label>
+                <input type="range" id="threshold" min="5" max="100" value="25">
+            </div>
+        </div>
     </div>
 
-    <div id="scan-overlay"></div>
-    <video id="video" playsinline webkit-playsinline autoplay muted></video>
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
 
-    <script type="module">
-        import * as THREE from 'three';
-        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', { alpha: false }); 
+        const ui = document.getElementById('ui');
+        
+        const btnStart = document.getElementById('btnStart');
+        const btnSwitch = document.getElementById('btnSwitch');
+        const btnSnap = document.getElementById('btnSnap');
+        const btnMode = document.getElementById('btnMode');
+        
+        const sliderRes = document.getElementById('resolution');
+        const sliderThresh = document.getElementById('threshold');
+        const charSelect = document.getElementById('charSelect');
 
-        // --- CONFIGURATION ---
-        const WIDTH = 160;  // Analysis Resolution X
-        const HEIGHT = 120; // Analysis Resolution Y
-        const THRESHOLD = 30; // How sharp an edge needs to be to get detected
-        const DEPTH_SCALE = 150; 
+        const tempCanvas = document.createElement('canvas');
+        const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true }); 
 
-        let video, ctx, canvasSmall;
-        let renderer, scene, camera, controls;
-        let particles;
+        const CHAR_SETS = {
+            standard: ".:-=+*#%@",
+            binary: "01",
+            matrix: "ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ",
+            khmer: "។៕៖ៗ៘៙៚៛ៜ៝កខគឃងចឆជឈញដឋឌឍណតថទធនបផពភមយរលវសហឡអាិីឹឺុូួើឿៀេែៃោៅឣឤឥឦឧឨឩឪឳឲឱឰឯឮឭឬឫំះំ"
+        };
 
-        // --- 1. SETUP ---
-        async function init() {
-            video = document.getElementById('video');
-            
-            // Get Camera (Back camera preferred)
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'environment', width: 640, height: 480 }
-                });
-                video.srcObject = stream;
-            } catch (e) {
-                // Fallback
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                video.srcObject = stream;
-            }
+        let currentGlyphs = CHAR_SETS.khmer;
+        let streaming = false;
+        let animationId;
+        let useFrontCamera = false; // Default to Back Camera for Scanning
+        let isScannerMode = false; // Toggle for Edge Detection
 
-            // Processing Canvas
-            canvasSmall = document.createElement('canvas');
-            canvasSmall.width = WIDTH;
-            canvasSmall.height = HEIGHT;
-            ctx = canvasSmall.getContext('2d', { willReadFrequently: true });
-
-            // Three.js Scene
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x000500);
-
-            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 1000);
-            camera.position.z = 400;
-
-            renderer = new THREE.WebGLRenderer({ antialias: false });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            document.body.appendChild(renderer.domElement);
-
-            controls = new OrbitControls(camera, renderer.domElement);
-            controls.enableDamping = true;
-            controls.autoRotate = false;
-
-            createParticles();
-            window.addEventListener('resize', onResize);
-            animate();
-        }
-
-        function createParticles() {
-            // We create enough points for the full grid, but we will hide most of them
-            const numPoints = WIDTH * HEIGHT;
-            const geometry = new THREE.BufferGeometry();
-            const positions = new Float32Array(numPoints * 3);
-            const colors = new Float32Array(numPoints * 3);
-            const sizes = new Float32Array(numPoints);
-
-            // Init Grid
-            let i = 0;
-            for (let y = 0; y < HEIGHT; y++) {
-                for (let x = 0; x < WIDTH; x++) {
-                    positions[i] = (x - WIDTH/2) * 3;
-                    positions[i+1] = (HEIGHT/2 - y) * 3;
-                    positions[i+2] = 0;
-                    
-                    colors[i] = 0; colors[i+1] = 1; colors[i+2] = 0; // Default Green
-                    sizes[i/3] = 0; // Start hidden (size 0)
-                    i += 3;
+        // --- CAMERA ---
+        async function startCamera() {
+            stopCamera(false);
+            const constraints = {
+                video: {
+                    facingMode: useFrontCamera ? "user" : "environment",
+                    width: { ideal: 640 }, height: { ideal: 480 }
                 }
+            };
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+                await video.play();
+                streaming = true;
+                btnStart.innerText = "STOP";
+                btnStart.classList.add("active");
+                loop();
+            } catch (err) {
+                alert("Camera Error: " + err.name);
             }
-
-            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-            geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
-
-            // Custom Shader Material for performant size scaling
-            const material = new THREE.PointsMaterial({
-                size: 2,
-                vertexColors: true
-            });
-
-            particles = new THREE.Points(geometry, material);
-            scene.add(particles);
         }
 
-        // --- 2. EDGE DETECTION ALGORITHM ---
-        function detectEdges() {
-            if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+        function stopCamera(clearScreen = true) {
+            streaming = false;
+            cancelAnimationFrame(animationId);
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+            if (clearScreen) {
+                btnStart.innerText = "START";
+                btnStart.classList.remove("active");
+                ctx.fillStyle = "black";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+        }
 
-            // Draw video frame to small canvas
-            ctx.drawImage(video, 0, 0, WIDTH, HEIGHT);
-            const frame = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
+        // --- LOOP ---
+        function loop() {
+            if (!streaming) return;
 
-            const positions = particles.geometry.attributes.position.array;
-            const colors = particles.geometry.attributes.color.array;
-            
-            // Access specific attribute directly requires workaround in basic ThreeJS
-            // We will just move "non-edges" far behind the camera to hide them
-            // or collapse them to a single point.
-            
-            let i = 0; // pixel index (r,g,b,a)
-            let p = 0; // particle index (x,y,z)
+            // Resize
+            if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            }
+            const w = canvas.width;
+            const h = canvas.height;
 
-            for (let y = 0; y < HEIGHT; y++) {
-                for (let x = 0; x < WIDTH; x++) {
+            const resVal = parseInt(sliderRes.value);
+            const thresholdVal = parseInt(sliderThresh.value);
+
+            // Calculate Grid
+            // High res value = Smaller font = More density
+            const fontSize = Math.max(6, w / resVal); 
+            const cols = Math.ceil(w / fontSize);
+            const rows = Math.ceil(h / (fontSize * 0.8));
+
+            if (tempCanvas.width !== cols || tempCanvas.height !== rows) {
+                tempCanvas.width = cols;
+                tempCanvas.height = rows;
+            }
+
+            // Draw Video
+            if (useFrontCamera) {
+                tempCtx.save();
+                tempCtx.translate(cols, 0);
+                tempCtx.scale(-1, 1);
+                tempCtx.drawImage(video, 0, 0, cols, rows);
+                tempCtx.restore();
+            } else {
+                tempCtx.drawImage(video, 0, 0, cols, rows);
+            }
+
+            const frame = tempCtx.getImageData(0, 0, cols, rows).data;
+
+            // Clear Screen
+            ctx.fillStyle = "black";
+            ctx.fillRect(0, 0, w, h);
+
+            // Set Font
+            ctx.font = `bold ${fontSize}px 'Courier New', 'Khmer OS System', monospace`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+
+            for (let y = 0; y < rows; y++) {
+                for (let x = 0; x < cols; x++) {
                     
-                    // Simple Edge Detection (Compare current pixel to right neighbor)
-                    // Index of current pixel
-                    const i = (y * WIDTH + x) * 4;
-                    // Index of pixel to the right
-                    const iRight = (y * WIDTH + (x + 1)) * 4;
-                    // Index of pixel below
-                    const iDown = ((y + 1) * WIDTH + x) * 4;
+                    const i = (y * cols + x) * 4;
+                    const r = frame[i]; const g = frame[i+1]; const b = frame[i+2];
+                    const brightness = (r + g + b) / 3;
 
-                    if (x < WIDTH - 1 && y < HEIGHT - 1) {
-                        // Get brightness
-                        const b = (frame[i] + frame[i+1] + frame[i+2]) / 3;
-                        const bRight = (frame[iRight] + frame[iRight+1] + frame[iRight+2]) / 3;
-                        const bDown = (frame[iDown] + frame[iDown+1] + frame[iDown+2]) / 3;
+                    let shouldDraw = false;
+                    let charColor = "#0f0"; // Default Green
 
-                        // Calculate difference (Derivative)
-                        const diffH = Math.abs(b - bRight);
-                        const diffV = Math.abs(b - bDown);
-                        const totalDiff = diffH + diffV;
+                    if (isScannerMode) {
+                        // --- SCANNER ALGORITHM (Edge Detection) ---
+                        // Compare current pixel with the one to the right
+                        if (x < cols - 1) {
+                            const iRight = (y * cols + (x + 1)) * 4;
+                            const bRight = (frame[iRight] + frame[iRight+1] + frame[iRight+2]) / 3;
+                            const diff = Math.abs(brightness - bRight);
 
-                        // IS IT AN EDGE?
-                        if (totalDiff > THRESHOLD) {
-                            // YES: Show this point
-                            
-                            // Color it based on original video, but boost it to Neon
-                            colors[p] = frame[i] / 255;     // R
-                            colors[p+1] = (frame[i+1] / 255) + 0.2; // G (Boost Green)
-                            colors[p+2] = frame[i+2] / 255; // B
-
-                            // Z-Position:
-                            // We still use brightness slightly to give volume, 
-                            // but mainly we define the structure.
-                            positions[p+2] = b * 0.5; 
-
-                        } else {
-                            // NO: Hide this point (Throw it far away)
-                            positions[p+2] = -5000; 
+                            if (diff > thresholdVal) {
+                                shouldDraw = true;
+                                // Make edges bright white/cyan
+                                charColor = "#aff"; 
+                            }
+                        }
+                    } else {
+                        // --- NORMAL MATRIX MODE ---
+                        if (brightness > 30) {
+                            shouldDraw = true;
+                            // Make bright parts brighter green
+                            const gVal = Math.min(255, brightness + 50);
+                            charColor = `rgb(0, ${gVal}, 0)`;
                         }
                     }
 
-                    p += 3;
+                    if (shouldDraw) {
+                        // Map to Glyph
+                        // If Scanner Mode, map based on random or constant
+                        // If Normal Mode, map based on brightness
+                        let charIdx;
+                        if(isScannerMode) {
+                             charIdx = Math.floor(Math.random() * currentGlyphs.length);
+                        } else {
+                             charIdx = Math.floor((brightness / 255) * (currentGlyphs.length - 1));
+                        }
+                        
+                        const safeIdx = Math.max(0, Math.min(currentGlyphs.length - 1, charIdx));
+                        
+                        ctx.fillStyle = charColor;
+                        ctx.fillText(
+                            currentGlyphs[safeIdx], 
+                            x * fontSize + (fontSize/2), 
+                            y * (fontSize * 0.8) + (fontSize/2)
+                        );
+                    }
                 }
             }
 
-            particles.geometry.attributes.position.needsUpdate = true;
-            particles.geometry.attributes.color.needsUpdate = true;
+            animationId = requestAnimationFrame(loop);
         }
 
-        function animate() {
-            requestAnimationFrame(animate);
-            detectEdges();
-            controls.update();
-            renderer.render(scene, camera);
-        }
+        // --- EVENTS ---
+        charSelect.addEventListener('change', (e) => {
+            currentGlyphs = CHAR_SETS[e.target.value];
+        });
 
-        function onResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        }
+        btnMode.addEventListener('click', () => {
+            isScannerMode = !isScannerMode;
+            if(isScannerMode) {
+                btnMode.innerText = "MODE: SCANNER";
+                btnMode.style.color = "#aff";
+                btnMode.style.borderColor = "#aff";
+            } else {
+                btnMode.innerText = "MODE: NORMAL";
+                btnMode.style.color = "#0f0";
+                btnMode.style.borderColor = "#0f0";
+            }
+        });
 
-        init();
+        btnStart.addEventListener('click', () => streaming ? stopCamera() : startCamera());
+        
+        btnSwitch.addEventListener('click', () => {
+            if (!streaming) return;
+            useFrontCamera = !useFrontCamera;
+            startCamera();
+        });
+
+        btnSnap.addEventListener('click', () => {
+            const link = document.createElement('a');
+            link.download = `scan_${Date.now()}.png`;
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        });
+
+        document.body.addEventListener('click', (e) => {
+            if (!e.target.closest('.ui-container')) {
+                ui.classList.toggle('ui-hidden');
+            }
+        });
+
     </script>
 </body>
 </html>
