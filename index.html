@@ -2,17 +2,44 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Real-Time Video to 3D Cloud</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Universal 3D Scanner</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; }
-        #ui {
-            position: absolute; top: 10px; left: 10px; color: #0f0;
-            background: rgba(0,0,0,0.8); padding: 15px; border: 1px solid #0f0;
-            pointer-events: none; z-index: 10;
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #000; 
+            font-family: 'Segoe UI', monospace; 
+            color: #0f0;
         }
-        #webcam { display: none; } /* Hide raw video, we only show 3D */
+
+        #ui {
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            background: rgba(0, 20, 0, 0.9);
+            border-top: 1px solid #0f0;
+            padding: 10px 0;
+            display: flex; flex-direction: column; align-items: center;
+            z-index: 100;
+        }
+
+        .controls {
+            display: flex; gap: 20px; width: 90%; max-width: 600px;
+        }
+
+        .slider-box { flex: 1; display: flex; flex-direction: column; }
+        label { font-size: 10px; margin-bottom: 5px; text-transform: uppercase; color: #8f8;}
+        input[type=range] { width: 100%; accent-color: #0f0; }
+
+        #stats {
+            position: absolute; top: 10px; left: 10px;
+            font-size: 12px; pointer-events: none;
+            background: rgba(0,0,0,0.5); padding: 5px;
+        }
+
+        video { display: none; }
     </style>
-    <!-- Import Three.js -->
+    
+    <!-- Three.js (The 3D Engine) -->
     <script type="importmap">
         {
             "imports": {
@@ -23,143 +50,227 @@
     </script>
 </head>
 <body>
-    <div id="ui">
-        <strong>REAL-TIME 3D RECONSTRUCTION</strong><br>
-        1. Converting Video Pixels to XYZ Points<br>
-        2. Mapping Brightness to Depth (Z-Axis)<br>
-        <br>
-        [Left Click]: Rotate Cloud<br>
-        [Right Click]: Pan<br>
-        [Scroll]: Zoom
+
+    <div id="stats">
+        SYSTEM: ONLINE<br>
+        MODE: TOPOLOGICAL SCAN<br>
+        <span id="fps">FPS: --</span>
     </div>
 
-    <!-- Hidden Video Element -->
-    <video id="webcam" autoplay playsinline muted></video>
+    <div id="ui">
+        <div class="controls">
+            <div class="slider-box">
+                <label>Depth (Z-Axis)</label>
+                <input type="range" id="depthRange" min="0" max="200" value="100">
+            </div>
+            <div class="slider-box">
+                <label>Point Size</label>
+                <input type="range" id="sizeRange" min="1" max="10" value="3">
+            </div>
+        </div>
+        <div style="font-size: 10px; margin-top: 5px; opacity: 0.7;">
+            Works on: Android, iOS, Windows, Mac
+        </div>
+    </div>
+
+    <video id="video" playsinline webkit-playsinline autoplay muted></video>
 
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
         // --- CONFIGURATION ---
-        const WIDTH = 160;  // Resolution X (Lower is faster)
-        const HEIGHT = 120; // Resolution Y
-        const SEPARATION = 1.5; // Distance between points
+        // Lower density = Faster performance on old phones
+        // 120x90 is a good balance for mobile web
+        const COLS = 120; 
+        const ROWS = 90; 
+        const SEPARATION = 4;
 
-        // --- 1. SETUP WEBCAM ---
-        const video = document.getElementById('webcam');
-        
-        async function initCamera() {
+        let video, ctx, canvasSmall;
+        let renderer, scene, camera, controls;
+        let particles, geometry;
+        let scanLineY = -200; // For the laser effect
+
+        // HTML Elements
+        const depthSlider = document.getElementById('depthRange');
+        const sizeSlider = document.getElementById('sizeRange');
+        const fpsDisplay = document.getElementById('fps');
+
+        // --- 1. INITIALIZE ---
+        async function init() {
+            // A. Setup Webcam
+            video = document.getElementById('video');
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { width: 640, height: 480 } 
-                });
+                // Constraints for mobile performance
+                const constraints = { 
+                    video: { 
+                        facingMode: 'environment', // Back camera preferred
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    } 
+                };
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = stream;
             } catch (err) {
-                alert("Camera Access Denied. Please allow camera.");
+                // Fallback for laptops without back camera
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    video.srcObject = stream;
+                } catch (e) {
+                    alert("Camera blocked. Please allow access.");
+                }
             }
+
+            // B. Setup Processing Canvas (Invisible)
+            canvasSmall = document.createElement('canvas');
+            canvasSmall.width = COLS;
+            canvasSmall.height = ROWS;
+            ctx = canvasSmall.getContext('2d', { willReadFrequently: true });
+
+            // C. Setup 3D Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+            scene.fog = new THREE.FogExp2(0x000000, 0.002);
+
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 10000);
+            camera.position.z = 600;
+
+            renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Cap pixel ratio for performance
+            document.body.appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.rotateSpeed = 0.5;
+
+            // D. Create Particle System
+            createParticles();
+
+            // E. Handle Resize
+            window.addEventListener('resize', onWindowResize);
+
+            // F. Start Loop
+            animate();
         }
-        initCamera();
 
-        // --- 2. SETUP 3D SCENE ---
-        const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x050505);
+        function createParticles() {
+            const numParticles = COLS * ROWS;
+            geometry = new THREE.BufferGeometry();
+            
+            const positions = new Float32Array(numParticles * 3);
+            const colors = new Float32Array(numParticles * 3);
 
-        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 10000);
-        camera.position.z = 500;
-
-        const renderer = new THREE.WebGLRenderer({ antialias: false });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        document.body.appendChild(renderer.domElement);
-
-        const controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-
-        // --- 3. CREATE PARTICLES (THE "CLOUD") ---
-        // We create a fixed grid of points. We will move them every frame.
-        const numParticles = WIDTH * HEIGHT;
-        const geometry = new THREE.BufferGeometry();
-        const positions = new Float32Array(numParticles * 3);
-        const colors = new Float32Array(numParticles * 3);
-
-        // Initialize grid positions
-        let i = 0;
-        for (let ix = 0; ix < WIDTH; ix++) {
-            for (let iy = 0; iy < HEIGHT; iy++) {
-                // Center the grid
-                positions[i] = (ix * SEPARATION) - ((WIDTH * SEPARATION) / 2); // X
-                positions[i + 1] = (iy * SEPARATION) - ((HEIGHT * SEPARATION) / 2); // Y
-                positions[i + 2] = 0; // Z (Depth) - We will update this live!
-                i += 3;
+            // Create Grid
+            let i = 0;
+            for (let iy = 0; iy < ROWS; iy++) {
+                for (let ix = 0; ix < COLS; ix++) {
+                    // Center the plane
+                    positions[i] = (ix * SEPARATION) - ((COLS * SEPARATION) / 2); // X
+                    positions[i + 1] = ((ROWS * SEPARATION) / 2) - (iy * SEPARATION); // Y (Inverted)
+                    positions[i + 2] = 0; // Z
+                    
+                    colors[i] = 0; colors[i+1] = 0; colors[i+2] = 0;
+                    i += 3;
+                }
             }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            const material = new THREE.PointsMaterial({
+                size: 3,
+                vertexColors: true,
+                sizeAttenuation: true
+            });
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
         }
 
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
 
-        const material = new THREE.PointsMaterial({
-            size: 2.0,
-            vertexColors: true,
-            sizeAttenuation: true
-        });
+        // --- 2. RENDER LOOP ---
+        let lastTime = 0;
+        let frameCount = 0;
 
-        const particles = new THREE.Points(geometry, material);
-        scene.add(particles);
-
-        // --- 4. PROCESSING LOOP ---
-        // Create a temporary canvas to read video pixels
-        const canvas = document.createElement('canvas');
-        canvas.width = WIDTH;
-        canvas.height = HEIGHT;
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-
-        function animate() {
+        function animate(time) {
             requestAnimationFrame(animate);
 
-            if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                // A. Draw video to small canvas
-                ctx.drawImage(video, 0, 0, WIDTH, HEIGHT);
-                
-                // B. Get Raw Pixel Data (R, G, B, A)
-                const imgData = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
+            // FPS Counter
+            if (time - lastTime >= 1000) {
+                fpsDisplay.innerText = `FPS: ${frameCount}`;
+                frameCount = 0;
+                lastTime = time;
+            }
+            frameCount++;
 
-                // C. Update 3D Points
+            // Only update if camera is ready
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                
+                // 1. Draw video to small grid
+                ctx.drawImage(video, 0, 0, COLS, ROWS);
+                const frame = ctx.getImageData(0, 0, COLS, ROWS).data;
+
+                // 2. Update 3D Points
                 const positions = particles.geometry.attributes.position.array;
                 const colors = particles.geometry.attributes.color.array;
+                
+                const depthMult = parseInt(depthSlider.value) / 100;
+                particles.material.size = parseInt(sizeSlider.value);
 
-                let j = 0; // Index for positions/colors
-                let k = 0; // Index for pixels (r,g,b,a)
+                // Update Scan Line Position
+                scanLineY -= 3;
+                if (scanLineY < -200) scanLineY = 200;
 
-                // Loop through every "pixel" in our 3D grid
-                for (let ix = 0; ix < WIDTH; ix++) {
-                    for (let iy = 0; iy < HEIGHT; iy++) {
+                let j = 0; // Position Index
+                let k = 0; // Pixel Index
+
+                for (let iy = 0; iy < ROWS; iy++) {
+                    for (let ix = 0; ix < COLS; ix++) {
                         
-                        const r = imgData[k];
-                        const g = imgData[k + 1];
-                        const b = imgData[k + 2];
+                        const r = frame[k];
+                        const g = frame[k + 1];
+                        const b = frame[k + 2];
 
-                        // Calculate Brightness
-                        const brightness = (r + g + b) / 3;
+                        // Calculate Brightness (0.0 to 1.0)
+                        const bright = (r + g + b) / 765; 
 
-                        // --- THE MAGIC: Z-DISPLACEMENT ---
-                        // We push bright pixels forward and dark pixels back
-                        // This creates a 3D topology map of the video
-                        const z = brightness * 0.8; 
+                        // TOPOLOGY LOGIC: Bright comes forward, Dark goes back
+                        let z = bright * 300 * depthMult;
+                        
+                        // Current Y Position of this point
+                        const currentY = positions[j + 1];
 
-                        // Update Z position
-                        // Note: We flip Y (HEIGHT - iy) because Canvas 0,0 is top-left, 3D is center
-                        positions[j + 2] = z; 
+                        // SCAN LINE EFFECT
+                        // If the point is near the invisible scan line, highlight it
+                        let isScan = Math.abs(currentY - scanLineY) < 10;
+                        
+                        if (isScan) {
+                            // Make scan line points White/Red and pop out
+                            colors[j] = 1; colors[j+1] = 0; colors[j+2] = 0; // Red
+                            z += 50; // Pop out
+                        } else {
+                            // Normal Colors (True Color)
+                            colors[j] = r / 255;
+                            colors[j+1] = g / 255;
+                            colors[j+2] = b / 255;
+                        }
 
-                        // Update Color (True Color)
-                        colors[j] = r / 255;
-                        colors[j + 1] = g / 255;
-                        colors[j + 2] = b / 255;
+                        // Apply Z
+                        // Smooth transition (Lerp) reduces flicker
+                        // positions[j + 2] += (z - positions[j + 2]) * 0.5; 
+                        positions[j+2] = z; // Instant update (faster)
 
                         j += 3;
                         k += 4;
                     }
                 }
 
-                // Tell Three.js to redraw geometry
                 particles.geometry.attributes.position.needsUpdate = true;
                 particles.geometry.attributes.color.needsUpdate = true;
             }
@@ -168,14 +279,9 @@
             renderer.render(scene, camera);
         }
 
-        // Handle Resize
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
+        // Start
+        init();
 
-        animate();
     </script>
 </body>
 </html>
