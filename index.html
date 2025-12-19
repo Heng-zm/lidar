@@ -2,315 +2,180 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Matrix LiDAR V2 (Thermal + HUD)</title>
-    
-    <!-- MediaPipe AI Libraries -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
-
+    <title>Real-Time Video to 3D Cloud</title>
     <style>
-        body {
-            background-color: #000;
-            margin: 0;
-            overflow: hidden;
-            font-family: 'Courier New', monospace;
-            user-select: none;
-            -webkit-user-select: none;
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: monospace; }
+        #ui {
+            position: absolute; top: 10px; left: 10px; color: #0f0;
+            background: rgba(0,0,0,0.8); padding: 15px; border: 1px solid #0f0;
+            pointer-events: none; z-index: 10;
         }
-
-        canvas {
-            display: block;
-            width: 100vw;
-            height: 100vh;
-        }
-
-        /* Loading Overlay */
-        #loader {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            background: black; z-index: 200;
-            display: flex; flex-direction: column;
-            justify-content: center; align-items: center;
-            color: #0f0; transition: opacity 0.5s;
-        }
-        .spinner {
-            width: 40px; height: 40px; border: 4px solid #333;
-            border-top: 4px solid #0f0; border-radius: 50%;
-            animation: spin 1s linear infinite; margin-bottom: 15px;
-        }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-
-        /* UI Panel */
-        .ui-container {
-            position: absolute; bottom: 20px; left: 50%;
-            transform: translateX(-50%);
-            width: 90%; max-width: 500px;
-            background: rgba(0, 10, 0, 0.85);
-            border: 1px solid #0f0; padding: 10px;
-            border-radius: 10px; z-index: 100;
-            display: flex; flex-direction: column; gap: 10px;
-            backdrop-filter: blur(4px);
-        }
-        
-        .row { display: flex; gap: 10px; }
-
-        button {
-            flex: 1; background: #000; color: #0f0;
-            border: 1px solid #0f0; padding: 12px;
-            font-family: monospace; font-weight: bold;
-            font-size: 14px; cursor: pointer;
-            text-transform: uppercase;
-        }
-        button.active { background: #0f0; color: black; }
-
-        /* The Moving Scan Line */
-        #scanline {
-            position: absolute; top: 0; left: 0;
-            width: 100%; height: 2px;
-            background: rgba(0, 255, 0, 0.8);
-            box-shadow: 0 0 10px #0f0, 0 0 20px #0f0;
-            z-index: 50;
-            animation: scan 3s linear infinite;
-            pointer-events: none;
-        }
-        @keyframes scan { 
-            0% { top: 0%; opacity: 0; } 
-            10% { opacity: 1; }
-            90% { opacity: 1; }
-            100% { top: 100%; opacity: 0; } 
-        }
-
-        video { display: none; }
+        #webcam { display: none; } /* Hide raw video, we only show 3D */
     </style>
+    <!-- Import Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
 </head>
 <body>
-
-    <div id="loader">
-        <div class="spinner"></div>
-        <div id="statusText">LOADING NEURAL NET...</div>
+    <div id="ui">
+        <strong>REAL-TIME 3D RECONSTRUCTION</strong><br>
+        1. Converting Video Pixels to XYZ Points<br>
+        2. Mapping Brightness to Depth (Z-Axis)<br>
+        <br>
+        [Left Click]: Rotate Cloud<br>
+        [Right Click]: Pan<br>
+        [Scroll]: Zoom
     </div>
 
-    <div id="scanline"></div>
+    <!-- Hidden Video Element -->
+    <video id="webcam" autoplay playsinline muted></video>
 
-    <div class="ui-container" id="ui">
-        <div class="row">
-            <button onclick="setMode('classic')" id="btnClassic" class="active">MATRIX</button>
-            <button onclick="setMode('thermal')" id="btnThermal">THERMAL</button>
-            <button onclick="setMode('hud')" id="btnHud">HUD</button>
-        </div>
-        <div class="row">
-            <button onclick="switchCamera()">SWITCH CAM</button>
-            <button onclick="takeSnapshot()">SAVE 📸</button>
-        </div>
-    </div>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-    <video id="input_video" playsinline muted autoplay></video>
-    <canvas id="output_canvas"></canvas>
+        // --- CONFIGURATION ---
+        const WIDTH = 160;  // Resolution X (Lower is faster)
+        const HEIGHT = 120; // Resolution Y
+        const SEPARATION = 1.5; // Distance between points
 
-    <script>
-        const videoElement = document.getElementById('input_video');
-        const canvasElement = document.getElementById('output_canvas');
-        const ctx = canvasElement.getContext('2d', { alpha: false });
-        const loader = document.getElementById('loader');
-        const statusText = document.getElementById('statusText');
-        const scanline = document.getElementById('scanline');
-
-        // Glyphs
-        const CHARS_MATRIX = " ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ";
-        const CHARS_BINARY = " 01";
-        const CHARS_DENSE = " .:-=+*#%@";
-
-        let mode = 'classic'; // classic, thermal, hud
-        let useFrontCamera = true;
-        let isReady = false;
+        // --- 1. SETUP WEBCAM ---
+        const video = document.getElementById('webcam');
         
-        // Setup internal processing canvas
-        const procCanvas = document.createElement('canvas');
-        const procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
-        
-        // --- 1. INITIALIZE AI ---
-        const selfieSegmentation = new SelfieSegmentation({locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`;
-        }});
-
-        selfieSegmentation.setOptions({ modelSelection: 1 }); // 0=Fast, 1=Accurate
-        selfieSegmentation.onResults(onResults);
-
-        // --- 2. CAMERA HANDLING ---
-        async function startCamera() {
-            if (videoElement.srcObject) {
-                videoElement.srcObject.getTracks().forEach(t => t.stop());
-            }
-
-            const constraints = {
-                video: {
-                    facingMode: useFrontCamera ? "user" : "environment",
-                    width: { ideal: 640 }, height: { ideal: 480 }
-                }
-            };
-
+        async function initCamera() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia(constraints);
-                videoElement.srcObject = stream;
-                await videoElement.play();
-                statusText.innerText = "SYSTEM READY";
-                setTimeout(() => { loader.style.opacity = 0; setTimeout(()=>loader.style.display='none',500); }, 500);
-                isReady = true;
-                processFrame(); // Start loop
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: 640, height: 480 } 
+                });
+                video.srcObject = stream;
             } catch (err) {
-                statusText.innerText = "CAMERA ERROR: " + err.name;
+                alert("Camera Access Denied. Please allow camera.");
+            }
+        }
+        initCamera();
+
+        // --- 2. SETUP 3D SCENE ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050505);
+
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 10000);
+        camera.position.z = 500;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // --- 3. CREATE PARTICLES (THE "CLOUD") ---
+        // We create a fixed grid of points. We will move them every frame.
+        const numParticles = WIDTH * HEIGHT;
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(numParticles * 3);
+        const colors = new Float32Array(numParticles * 3);
+
+        // Initialize grid positions
+        let i = 0;
+        for (let ix = 0; ix < WIDTH; ix++) {
+            for (let iy = 0; iy < HEIGHT; iy++) {
+                // Center the grid
+                positions[i] = (ix * SEPARATION) - ((WIDTH * SEPARATION) / 2); // X
+                positions[i + 1] = (iy * SEPARATION) - ((HEIGHT * SEPARATION) / 2); // Y
+                positions[i + 2] = 0; // Z (Depth) - We will update this live!
+                i += 3;
             }
         }
 
-        function switchCamera() {
-            useFrontCamera = !useFrontCamera;
-            isReady = false;
-            startCamera();
-        }
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-        // --- 3. PROCESSING LOOP ---
-        async function processFrame() {
-            if(!isReady) return;
-            // Send video frame to AI
-            await selfieSegmentation.send({image: videoElement});
-            // Loop moves to onResults, then we request next frame there
-            requestAnimationFrame(processFrame);
-        }
+        const material = new THREE.PointsMaterial({
+            size: 2.0,
+            vertexColors: true,
+            sizeAttenuation: true
+        });
 
-        // --- 4. RENDER ENGINE ---
-        function onResults(results) {
-            // Resize screen if needed
-            if (canvasElement.width !== window.innerWidth || canvasElement.height !== window.innerHeight) {
-                canvasElement.width = window.innerWidth;
-                canvasElement.height = window.innerHeight;
-            }
-            const w = canvasElement.width;
-            const h = canvasElement.height;
+        const particles = new THREE.Points(geometry, material);
+        scene.add(particles);
 
-            // Grid Resolution (Lower = Faster)
-            const cols = 80; 
-            const rows = Math.ceil(cols * (h / w));
-            const fontSize = Math.ceil(w / cols);
+        // --- 4. PROCESSING LOOP ---
+        // Create a temporary canvas to read video pixels
+        const canvas = document.createElement('canvas');
+        canvas.width = WIDTH;
+        canvas.height = HEIGHT;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-            // Prepare small canvas for pixel reading
-            procCanvas.width = cols;
-            procCanvas.height = rows;
+        function animate() {
+            requestAnimationFrame(animate);
 
-            // Draw Video Image
-            procCtx.save();
-            if(useFrontCamera) {
-                procCtx.translate(cols, 0); procCtx.scale(-1, 1);
-            }
-            procCtx.drawImage(results.image, 0, 0, cols, rows);
-            procCtx.restore();
-            const imgData = procCtx.getImageData(0, 0, cols, rows).data;
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                // A. Draw video to small canvas
+                ctx.drawImage(video, 0, 0, WIDTH, HEIGHT);
+                
+                // B. Get Raw Pixel Data (R, G, B, A)
+                const imgData = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
 
-            // Draw AI Mask (Person vs BG)
-            procCtx.clearRect(0, 0, cols, rows);
-            procCtx.save();
-            if(useFrontCamera) {
-                procCtx.translate(cols, 0); procCtx.scale(-1, 1);
-            }
-            procCtx.drawImage(results.segmentationMask, 0, 0, cols, rows);
-            procCtx.restore();
-            const maskData = procCtx.getImageData(0, 0, cols, rows).data;
+                // C. Update 3D Points
+                const positions = particles.geometry.attributes.position.array;
+                const colors = particles.geometry.attributes.color.array;
 
-            // CLEAR SCREEN
-            ctx.fillStyle = "black";
-            ctx.fillRect(0, 0, w, h);
+                let j = 0; // Index for positions/colors
+                let k = 0; // Index for pixels (r,g,b,a)
 
-            ctx.font = `bold ${fontSize}px monospace`;
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
+                // Loop through every "pixel" in our 3D grid
+                for (let ix = 0; ix < WIDTH; ix++) {
+                    for (let iy = 0; iy < HEIGHT; iy++) {
+                        
+                        const r = imgData[k];
+                        const g = imgData[k + 1];
+                        const b = imgData[k + 2];
 
-            // RENDER LOOP
-            for (let y = 0; y < rows; y++) {
-                for (let x = 0; x < cols; x++) {
-                    const i = (y * cols + x) * 4;
+                        // Calculate Brightness
+                        const brightness = (r + g + b) / 3;
 
-                    // 1. Get Brightness
-                    const pixelBright = (imgData[i] + imgData[i+1] + imgData[i+2]) / 3;
-                    
-                    // 2. Get AI Confidence (Is this a person?)
-                    // MediaPipe puts mask in R channel (0-255)
-                    const confidence = maskData[i]; 
-                    const isPerson = confidence > 100;
+                        // --- THE MAGIC: Z-DISPLACEMENT ---
+                        // We push bright pixels forward and dark pixels back
+                        // This creates a 3D topology map of the video
+                        const z = brightness * 0.8; 
 
-                    if(pixelBright < 20 && !isPerson) continue; // Skip dark background
+                        // Update Z position
+                        // Note: We flip Y (HEIGHT - iy) because Canvas 0,0 is top-left, 3D is center
+                        positions[j + 2] = z; 
 
-                    // 3. APPLY MODES
-                    let char, color;
+                        // Update Color (True Color)
+                        colors[j] = r / 255;
+                        colors[j + 1] = g / 255;
+                        colors[j + 2] = b / 255;
 
-                    if (mode === 'classic') {
-                        // MATRIX STYLE
-                        if (isPerson) {
-                            char = CHARS_MATRIX[Math.floor((pixelBright/255)*(CHARS_MATRIX.length-1))];
-                            color = '#00ff00'; // Bright Green
-                        } else {
-                            char = CHARS_BINARY[Math.floor(Math.random()*2)];
-                            color = 'rgba(0, 50, 0, 0.5)'; // Dark Green
-                        }
-                    } 
-                    else if (mode === 'thermal') {
-                        // PREDATOR / THERMAL STYLE
-                        char = CHARS_DENSE[Math.floor((pixelBright/255)*(CHARS_DENSE.length-1))];
-                        if (isPerson) {
-                            // Heatmap Gradient: Dark Red -> Orange -> Yellow -> White
-                            if (pixelBright > 180) color = '#ffff00'; // Yellow
-                            else if (pixelBright > 100) color = '#ff8800'; // Orange
-                            else color = '#ff0000'; // Red
-                        } else {
-                            // Cold Background: Dark Blue
-                            color = 'rgba(0, 0, 100, 0.4)';
-                        }
-                    } 
-                    else if (mode === 'hud') {
-                        // IRON MAN STYLE
-                        if (isPerson) {
-                            char = CHARS_DENSE[Math.floor((pixelBright/255)*(CHARS_DENSE.length-1))];
-                            color = '#00ffff'; // Cyan
-                        } else {
-                            // Grid effect for background
-                            if (x % 4 === 0 || y % 4 === 0) {
-                                char = '+';
-                                color = 'rgba(255, 0, 255, 0.2)'; // Faint Purple
-                            } else {
-                                continue;
-                            }
-                        }
+                        j += 3;
+                        k += 4;
                     }
-
-                    // Draw
-                    ctx.fillStyle = color;
-                    ctx.fillText(char, x * fontSize + fontSize/2, y * fontSize + fontSize/2);
                 }
+
+                // Tell Three.js to redraw geometry
+                particles.geometry.attributes.position.needsUpdate = true;
+                particles.geometry.attributes.color.needsUpdate = true;
             }
+
+            controls.update();
+            renderer.render(scene, camera);
         }
 
-        // --- UI LOGIC ---
-        function setMode(newMode) {
-            mode = newMode;
-            // Scanline color change
-            if(mode === 'classic') scanline.style.boxShadow = "0 0 10px #0f0";
-            if(mode === 'thermal') scanline.style.boxShadow = "0 0 10px #f00";
-            if(mode === 'hud') scanline.style.boxShadow = "0 0 10px #0ff";
-            
-            // Buttons update
-            document.querySelectorAll('.row button').forEach(b => b.classList.remove('active'));
-            if(newMode === 'classic') document.getElementById('btnClassic').classList.add('active');
-            if(newMode === 'thermal') document.getElementById('btnThermal').classList.add('active');
-            if(newMode === 'hud') document.getElementById('btnHud').classList.add('active');
-        }
+        // Handle Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
 
-        function takeSnapshot() {
-            const link = document.createElement('a');
-            link.download = `lidar_scan_${Date.now()}.png`;
-            link.href = canvasElement.toDataURL();
-            link.click();
-        }
-
-        // Init
-        startCamera();
-
+        animate();
     </script>
 </body>
 </html>
