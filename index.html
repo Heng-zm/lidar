@@ -3,11 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Matrix Cam (AI LiDAR Depth)</title>
-    <!-- Import Google MediaPipe AI -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <title>Matrix LiDAR V2 (Thermal + HUD)</title>
+    
+    <!-- MediaPipe AI Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
 
     <style>
@@ -16,8 +14,8 @@
             margin: 0;
             overflow: hidden;
             font-family: 'Courier New', monospace;
-            touch-action: none;
             user-select: none;
+            -webkit-user-select: none;
         }
 
         canvas {
@@ -26,80 +24,86 @@
             height: 100vh;
         }
 
-        /* Loading Spinner */
+        /* Loading Overlay */
         #loader {
-            position: absolute;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            color: #0f0;
-            font-weight: bold;
-            font-size: 20px;
-            text-align: center;
-            z-index: 200;
-            text-shadow: 0 0 10px #0f0;
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: black; z-index: 200;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            color: #0f0; transition: opacity 0.5s;
         }
+        .spinner {
+            width: 40px; height: 40px; border: 4px solid #333;
+            border-top: 4px solid #0f0; border-radius: 50%;
+            animation: spin 1s linear infinite; margin-bottom: 15px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
         /* UI Panel */
         .ui-container {
-            position: absolute;
-            bottom: 20px;
-            left: 50%;
+            position: absolute; bottom: 20px; left: 50%;
             transform: translateX(-50%);
-            width: 90%;
-            max-width: 400px;
-            background: rgba(0, 20, 0, 0.9);
-            border: 1px solid #0f0;
-            padding: 15px;
-            border-radius: 12px;
-            z-index: 100;
-            display: flex;
-            gap: 10px;
-            box-shadow: 0 0 20px rgba(0, 255, 0, 0.2);
-            transition: opacity 0.5s;
+            width: 90%; max-width: 500px;
+            background: rgba(0, 10, 0, 0.85);
+            border: 1px solid #0f0; padding: 10px;
+            border-radius: 10px; z-index: 100;
+            display: flex; flex-direction: column; gap: 10px;
+            backdrop-filter: blur(4px);
         }
         
-        .ui-hidden { opacity: 0; pointer-events: none; }
+        .row { display: flex; gap: 10px; }
 
         button {
-            flex: 1;
-            background: #000;
-            color: #0f0;
-            border: 1px solid #0f0;
-            padding: 10px;
-            font-family: monospace;
-            font-weight: bold;
-            cursor: pointer;
+            flex: 1; background: #000; color: #0f0;
+            border: 1px solid #0f0; padding: 12px;
+            font-family: monospace; font-weight: bold;
+            font-size: 14px; cursor: pointer;
+            text-transform: uppercase;
         }
-        button:active { background: #0f0; color: black; }
+        button.active { background: #0f0; color: black; }
 
-        .slider-group {
-            flex: 2;
-            display: flex;
-            flex-direction: column;
-            color: #0f0;
+        /* The Moving Scan Line */
+        #scanline {
+            position: absolute; top: 0; left: 0;
+            width: 100%; height: 2px;
+            background: rgba(0, 255, 0, 0.8);
+            box-shadow: 0 0 10px #0f0, 0 0 20px #0f0;
+            z-index: 50;
+            animation: scan 3s linear infinite;
+            pointer-events: none;
         }
-        
-        label { font-size: 10px; margin-bottom: 5px; }
-        input[type=range] { accent-color: #0f0; }
+        @keyframes scan { 
+            0% { top: 0%; opacity: 0; } 
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { top: 100%; opacity: 0; } 
+        }
 
         video { display: none; }
     </style>
 </head>
 <body>
 
-    <div id="loader">INITIALIZING AI DEPTH SCANNER...<br><span style="font-size:12px">Please Wait</span></div>
-
-    <div class="ui-container" id="ui">
-        <button id="btnSwitch">SWITCH CAM</button>
-        <div class="slider-group">
-            <label>DEPTH THRESHOLD</label>
-            <input type="range" id="threshold" min="0" max="100" value="50">
-        </div>
-        <button id="btnSnap">SAVE</button>
+    <div id="loader">
+        <div class="spinner"></div>
+        <div id="statusText">LOADING NEURAL NET...</div>
     </div>
 
-    <!-- Hidden Video Element for MediaPipe -->
-    <video id="input_video" playsinline></video>
+    <div id="scanline"></div>
+
+    <div class="ui-container" id="ui">
+        <div class="row">
+            <button onclick="setMode('classic')" id="btnClassic" class="active">MATRIX</button>
+            <button onclick="setMode('thermal')" id="btnThermal">THERMAL</button>
+            <button onclick="setMode('hud')" id="btnHud">HUD</button>
+        </div>
+        <div class="row">
+            <button onclick="switchCamera()">SWITCH CAM</button>
+            <button onclick="takeSnapshot()">SAVE 📸</button>
+        </div>
+    </div>
+
+    <video id="input_video" playsinline muted autoplay></video>
     <canvas id="output_canvas"></canvas>
 
     <script>
@@ -107,133 +111,173 @@
         const canvasElement = document.getElementById('output_canvas');
         const ctx = canvasElement.getContext('2d', { alpha: false });
         const loader = document.getElementById('loader');
-        const sliderThreshold = document.getElementById('threshold');
-        
+        const statusText = document.getElementById('statusText');
+        const scanline = document.getElementById('scanline');
+
         // Glyphs
-        const CHARS_FOREGROUND = " ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ"; // Matrix
-        const CHARS_BACKGROUND = " 01"; // Binary
+        const CHARS_MATRIX = " ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ";
+        const CHARS_BINARY = " 01";
+        const CHARS_DENSE = " .:-=+*#%@";
+
+        let mode = 'classic'; // classic, thermal, hud
+        let useFrontCamera = true;
+        let isReady = false;
         
-        let width, height;
-        let activeEffect = true;
+        // Setup internal processing canvas
+        const procCanvas = document.createElement('canvas');
+        const procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
         
-        // --- 1. SETUP AI (MediaPipe) ---
+        // --- 1. INITIALIZE AI ---
         const selfieSegmentation = new SelfieSegmentation({locateFile: (file) => {
             return `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`;
         }});
 
-        selfieSegmentation.setOptions({
-            modelSelection: 1, // 0 = Fast, 1 = High Accuracy
-        });
-
+        selfieSegmentation.setOptions({ modelSelection: 1 }); // 0=Fast, 1=Accurate
         selfieSegmentation.onResults(onResults);
 
-        // --- 2. CAMERA SETUP ---
-        const camera = new Camera(videoElement, {
-            onFrame: async () => {
-                await selfieSegmentation.send({image: videoElement});
-            },
-            width: 640,
-            height: 480,
-            facingMode: 'user' // Default to front
-        });
+        // --- 2. CAMERA HANDLING ---
+        async function startCamera() {
+            if (videoElement.srcObject) {
+                videoElement.srcObject.getTracks().forEach(t => t.stop());
+            }
 
-        // Start Camera
-        camera.start().then(() => {
-            loader.style.display = 'none';
-        });
+            const constraints = {
+                video: {
+                    facingMode: useFrontCamera ? "user" : "environment",
+                    width: { ideal: 640 }, height: { ideal: 480 }
+                }
+            };
 
-        // --- 3. THE RENDER LOOP (Called by AI) ---
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                videoElement.srcObject = stream;
+                await videoElement.play();
+                statusText.innerText = "SYSTEM READY";
+                setTimeout(() => { loader.style.opacity = 0; setTimeout(()=>loader.style.display='none',500); }, 500);
+                isReady = true;
+                processFrame(); // Start loop
+            } catch (err) {
+                statusText.innerText = "CAMERA ERROR: " + err.name;
+            }
+        }
+
+        function switchCamera() {
+            useFrontCamera = !useFrontCamera;
+            isReady = false;
+            startCamera();
+        }
+
+        // --- 3. PROCESSING LOOP ---
+        async function processFrame() {
+            if(!isReady) return;
+            // Send video frame to AI
+            await selfieSegmentation.send({image: videoElement});
+            // Loop moves to onResults, then we request next frame there
+            requestAnimationFrame(processFrame);
+        }
+
+        // --- 4. RENDER ENGINE ---
         function onResults(results) {
-            // Resize Canvas if needed
+            // Resize screen if needed
             if (canvasElement.width !== window.innerWidth || canvasElement.height !== window.innerHeight) {
                 canvasElement.width = window.innerWidth;
                 canvasElement.height = window.innerHeight;
             }
-            width = canvasElement.width;
-            height = canvasElement.height;
+            const w = canvasElement.width;
+            const h = canvasElement.height;
 
-            // Prepare Background Canvas (To read pixels)
-            // We draw the raw video image to an invisible canvas to get RGB data
-            const tmpCanvas = document.createElement('canvas');
-            const tmpCtx = tmpCanvas.getContext('2d');
-            const cols = 80; // Fixed resolution for performance
-            const rows = Math.ceil(cols * (height/width));
-            
-            tmpCanvas.width = cols;
-            tmpCanvas.height = rows;
-            
-            // Draw Video (Mirrored)
-            tmpCtx.translate(cols, 0);
-            tmpCtx.scale(-1, 1);
-            tmpCtx.drawImage(results.image, 0, 0, cols, rows);
-            
-            // Draw Mask (The AI Depth Map)
-            // MediaPipe gives us a mask where the human is white and background is black
-            const maskCanvas = document.createElement('canvas');
-            const maskCtx = maskCanvas.getContext('2d');
-            maskCanvas.width = cols;
-            maskCanvas.height = rows;
-            
-            maskCtx.translate(cols, 0);
-            maskCtx.scale(-1, 1);
-            maskCtx.drawImage(results.segmentationMask, 0, 0, cols, rows);
+            // Grid Resolution (Lower = Faster)
+            const cols = 80; 
+            const rows = Math.ceil(cols * (h / w));
+            const fontSize = Math.ceil(w / cols);
 
-            // Get Data Arrays
-            const imgData = tmpCtx.getImageData(0, 0, cols, rows).data;
-            const maskData = maskCtx.getImageData(0, 0, cols, rows).data;
+            // Prepare small canvas for pixel reading
+            procCanvas.width = cols;
+            procCanvas.height = rows;
 
-            // --- DRAW MATRIX ---
+            // Draw Video Image
+            procCtx.save();
+            if(useFrontCamera) {
+                procCtx.translate(cols, 0); procCtx.scale(-1, 1);
+            }
+            procCtx.drawImage(results.image, 0, 0, cols, rows);
+            procCtx.restore();
+            const imgData = procCtx.getImageData(0, 0, cols, rows).data;
+
+            // Draw AI Mask (Person vs BG)
+            procCtx.clearRect(0, 0, cols, rows);
+            procCtx.save();
+            if(useFrontCamera) {
+                procCtx.translate(cols, 0); procCtx.scale(-1, 1);
+            }
+            procCtx.drawImage(results.segmentationMask, 0, 0, cols, rows);
+            procCtx.restore();
+            const maskData = procCtx.getImageData(0, 0, cols, rows).data;
+
+            // CLEAR SCREEN
             ctx.fillStyle = "black";
-            ctx.fillRect(0, 0, width, height);
+            ctx.fillRect(0, 0, w, h);
 
-            const fontSize = width / cols;
             ctx.font = `bold ${fontSize}px monospace`;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
 
-            const cutoff = sliderThreshold.value * 2.55; // 0-255
-
+            // RENDER LOOP
             for (let y = 0; y < rows; y++) {
                 for (let x = 0; x < cols; x++) {
                     const i = (y * cols + x) * 4;
+
+                    // 1. Get Brightness
+                    const pixelBright = (imgData[i] + imgData[i+1] + imgData[i+2]) / 3;
                     
-                    // 1. Check AI Mask (Alpha channel)
-                    // maskData[i] is R, [i+3] is Alpha. MediaPipe usually puts confidence in R.
+                    // 2. Get AI Confidence (Is this a person?)
+                    // MediaPipe puts mask in R channel (0-255)
                     const confidence = maskData[i]; 
+                    const isPerson = confidence > 100;
 
-                    // 2. Get Brightness
-                    const r = imgData[i];
-                    const g = imgData[i+1];
-                    const b = imgData[i+2];
-                    let brightness = (r+g+b)/3;
+                    if(pixelBright < 20 && !isPerson) continue; // Skip dark background
 
-                    // 3. LOGIC: Is it Human or Background?
-                    let isHuman = confidence > 100; // If confidence > 100, it's the person
+                    // 3. APPLY MODES
+                    let char, color;
 
-                    // Determine Style based on Depth
-                    let charSet, color;
-                    
-                    if (isHuman) {
-                        // FOREGROUND (You)
-                        charSet = CHARS_FOREGROUND;
-                        // Bright Green
-                        color = `rgb(50, 255, 50)`; 
-                        // Boost brightness for foreground
-                        brightness = brightness * 1.5;
-                    } else {
-                        // BACKGROUND (Room)
-                        charSet = CHARS_BACKGROUND;
-                        // Dark Green / Dim
-                        color = `rgba(0, 100, 0, 0.5)`; 
-                        brightness = brightness * 0.5;
+                    if (mode === 'classic') {
+                        // MATRIX STYLE
+                        if (isPerson) {
+                            char = CHARS_MATRIX[Math.floor((pixelBright/255)*(CHARS_MATRIX.length-1))];
+                            color = '#00ff00'; // Bright Green
+                        } else {
+                            char = CHARS_BINARY[Math.floor(Math.random()*2)];
+                            color = 'rgba(0, 50, 0, 0.5)'; // Dark Green
+                        }
+                    } 
+                    else if (mode === 'thermal') {
+                        // PREDATOR / THERMAL STYLE
+                        char = CHARS_DENSE[Math.floor((pixelBright/255)*(CHARS_DENSE.length-1))];
+                        if (isPerson) {
+                            // Heatmap Gradient: Dark Red -> Orange -> Yellow -> White
+                            if (pixelBright > 180) color = '#ffff00'; // Yellow
+                            else if (pixelBright > 100) color = '#ff8800'; // Orange
+                            else color = '#ff0000'; // Red
+                        } else {
+                            // Cold Background: Dark Blue
+                            color = 'rgba(0, 0, 100, 0.4)';
+                        }
+                    } 
+                    else if (mode === 'hud') {
+                        // IRON MAN STYLE
+                        if (isPerson) {
+                            char = CHARS_DENSE[Math.floor((pixelBright/255)*(CHARS_DENSE.length-1))];
+                            color = '#00ffff'; // Cyan
+                        } else {
+                            // Grid effect for background
+                            if (x % 4 === 0 || y % 4 === 0) {
+                                char = '+';
+                                color = 'rgba(255, 0, 255, 0.2)'; // Faint Purple
+                            } else {
+                                continue;
+                            }
+                        }
                     }
-
-                    if (brightness < 20) continue;
-
-                    // Map Character
-                    const charIdx = Math.floor((brightness / 255) * (charSet.length - 1));
-                    const safeIdx = Math.max(0, Math.min(charSet.length-1, charIdx));
-                    const char = charSet[safeIdx];
 
                     // Draw
                     ctx.fillStyle = color;
@@ -242,19 +286,30 @@
             }
         }
 
-        // --- BUTTONS ---
-        document.getElementById('btnSnap').addEventListener('click', () => {
+        // --- UI LOGIC ---
+        function setMode(newMode) {
+            mode = newMode;
+            // Scanline color change
+            if(mode === 'classic') scanline.style.boxShadow = "0 0 10px #0f0";
+            if(mode === 'thermal') scanline.style.boxShadow = "0 0 10px #f00";
+            if(mode === 'hud') scanline.style.boxShadow = "0 0 10px #0ff";
+            
+            // Buttons update
+            document.querySelectorAll('.row button').forEach(b => b.classList.remove('active'));
+            if(newMode === 'classic') document.getElementById('btnClassic').classList.add('active');
+            if(newMode === 'thermal') document.getElementById('btnThermal').classList.add('active');
+            if(newMode === 'hud') document.getElementById('btnHud').classList.add('active');
+        }
+
+        function takeSnapshot() {
             const link = document.createElement('a');
-            link.download = 'lidar_matrix.png';
+            link.download = `lidar_scan_${Date.now()}.png`;
             link.href = canvasElement.toDataURL();
             link.click();
-        });
+        }
 
-        document.body.addEventListener('click', (e) => {
-             if (!e.target.closest('.ui-container')) {
-                document.getElementById('ui').classList.toggle('ui-hidden');
-            }
-        });
+        // Init
+        startCamera();
 
     </script>
 </body>
