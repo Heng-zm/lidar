@@ -82,13 +82,14 @@
         <div class="row-top">
             <button id="btnStart">START</button>
             <button id="btnSwitch">↻</button>
-            <!-- NEW BUTTON FOR EDGE DETECTION -->
             <button id="btnMode">MODE: NORMAL</button> 
             <button id="btnSnap">📷</button>
         </div>
 
         <div class="row-select">
             <select id="charSelect">
+                <!-- NEW OPTION ADDED HERE -->
+                <option value="dots">Dots (....)</option>
                 <option value="khmer">Khmer (ខ្មែរ)</option>
                 <option value="matrix">Matrix (ﾊﾐﾋｰｳ)</option>
                 <option value="binary">Binary (0101)</option>
@@ -130,17 +131,24 @@
         const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true }); 
 
         const CHAR_SETS = {
+            // NEW CHARACTER SET
+            // Starts with a space (empty) so dark pixels are hidden
+            // Then dots increasing in visual weight
+            dots: " .:", 
+            
             standard: ".:-=+*#%@",
             binary: "01",
             matrix: "ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ",
             khmer: "។៕៖ៗ៘៙៚៛ៜ៝កខគឃងចឆជឈញដឋឌឍណតថទធនបផពភមយរលវសហឡអាិីឹឺុូួើឿៀេែៃោៅឣឤឥឦឧឨឩឪឳឲឱឰឯឮឭឬឫំះំ"
         };
 
-        let currentGlyphs = CHAR_SETS.khmer;
+        // Default to dots since that was requested
+        let currentGlyphs = CHAR_SETS.dots;
+        
         let streaming = false;
         let animationId;
-        let useFrontCamera = false; // Default to Back Camera for Scanning
-        let isScannerMode = false; // Toggle for Edge Detection
+        let useFrontCamera = false;
+        let isScannerMode = false;
 
         // --- CAMERA ---
         async function startCamera() {
@@ -194,8 +202,7 @@
             const resVal = parseInt(sliderRes.value);
             const thresholdVal = parseInt(sliderThresh.value);
 
-            // Calculate Grid
-            // High res value = Smaller font = More density
+            // Grid
             const fontSize = Math.max(6, w / resVal); 
             const cols = Math.ceil(w / fontSize);
             const rows = Math.ceil(h / (fontSize * 0.8));
@@ -222,8 +229,14 @@
             ctx.fillStyle = "black";
             ctx.fillRect(0, 0, w, h);
 
-            // Set Font
-            ctx.font = `bold ${fontSize}px 'Courier New', 'Khmer OS System', monospace`;
+            // Font
+            // Check if Khmer to use fallback font
+            if(charSelect.value === 'khmer') {
+                ctx.font = `bold ${fontSize}px 'Khmer OS System', 'Courier New', monospace`;
+            } else {
+                ctx.font = `bold ${fontSize}px monospace`;
+            }
+            
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
 
@@ -235,11 +248,10 @@
                     const brightness = (r + g + b) / 3;
 
                     let shouldDraw = false;
-                    let charColor = "#0f0"; // Default Green
+                    let charColor = "#0f0";
 
                     if (isScannerMode) {
-                        // --- SCANNER ALGORITHM (Edge Detection) ---
-                        // Compare current pixel with the one to the right
+                        // SCANNER ALGORITHM (Edge)
                         if (x < cols - 1) {
                             const iRight = (y * cols + (x + 1)) * 4;
                             const bRight = (frame[iRight] + frame[iRight+1] + frame[iRight+2]) / 3;
@@ -247,24 +259,19 @@
 
                             if (diff > thresholdVal) {
                                 shouldDraw = true;
-                                // Make edges bright white/cyan
                                 charColor = "#aff"; 
                             }
                         }
                     } else {
-                        // --- NORMAL MATRIX MODE ---
+                        // NORMAL MODE
                         if (brightness > 30) {
                             shouldDraw = true;
-                            // Make bright parts brighter green
                             const gVal = Math.min(255, brightness + 50);
                             charColor = `rgb(0, ${gVal}, 0)`;
                         }
                     }
 
                     if (shouldDraw) {
-                        // Map to Glyph
-                        // If Scanner Mode, map based on random or constant
-                        // If Normal Mode, map based on brightness
                         let charIdx;
                         if(isScannerMode) {
                              charIdx = Math.floor(Math.random() * currentGlyphs.length);
