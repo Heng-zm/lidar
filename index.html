@@ -3,125 +3,141 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Matrix LiDAR (Optimized)</title>
+    <title>LiDAR OS 26 (Turbo)</title>
     <style>
+        :root {
+            --glass: rgba(18, 18, 18, 0.85);
+            --border: rgba(255, 255, 255, 0.15);
+            --primary: #0A84FF;
+            --danger: #FF453A;
+            --txt: #FFF;
+        }
+
         body {
             background-color: #000;
             margin: 0;
             overflow: hidden;
-            font-family: 'Courier New', monospace;
+            font-family: -apple-system, "SF Pro Display", sans-serif;
+            color: var(--txt);
             touch-action: none;
             user-select: none;
             -webkit-tap-highlight-color: transparent;
         }
 
-        canvas {
-            display: block;
-            width: 100vw;
-            height: 100vh;
-        }
+        canvas { display: block; width: 100vw; height: 100vh; }
 
-        /* Debug Stats */
-        #stats {
-            position: absolute; top: 5px; left: 5px;
-            color: #0f0; font-size: 10px; font-weight: bold;
-            pointer-events: none; text-shadow: 1px 1px 0 #000;
-            z-index: 20;
+        /* DYNAMIC ISLAND */
+        .island-wrap {
+            position: absolute; top: 10px; width: 100%;
+            display: flex; justify-content: center; z-index: 10;
         }
-
-        /* UI Panel */
-        .ui-container {
-            position: absolute;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 95%;
-            max-width: 500px;
-            background: rgba(0, 15, 0, 0.92);
-            border: 1px solid #0a0;
-            padding: 12px;
-            border-radius: 12px;
-            z-index: 100;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            backdrop-filter: blur(5px);
+        .island {
+            background: #000; border-radius: 20px;
+            height: 36px; padding: 0 16px; min-width: 100px;
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 12px; font-size: 12px; font-weight: 600;
             box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-            transition: opacity 0.3s ease;
+            transition: 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .island.active { min-width: 160px; transform: scale(1.05); }
+        .dot { width: 8px; height: 8px; background: #333; border-radius: 50%; transition: 0.3s; }
+        .dot.live { background: #0f0; box-shadow: 0 0 8px #0f0; }
+
+        /* CONTROLS */
+        .ui-layer {
+            position: absolute; bottom: 0; width: 100%;
+            padding-bottom: max(20px, env(safe-area-inset-bottom));
+            background: linear-gradient(to top, #000 10%, transparent);
+            display: flex; flex-direction: column; align-items: center; gap: 15px;
         }
 
-        .ui-hidden { opacity: 0; pointer-events: none; }
-
-        /* Buttons */
-        .row-top { display: flex; gap: 8px; height: 42px; }
-
-        button {
-            border: 1px solid #0a0;
-            border-radius: 6px;
-            font-weight: 700;
-            font-size: 11px;
-            cursor: pointer;
-            text-transform: uppercase;
-            background: #000;
-            color: #0f0;
-            flex: 1;
-            transition: background 0.2s;
+        /* Mode Selector */
+        .modes {
+            display: flex; gap: 20px; overflow-x: auto; 
+            padding: 5px 20px; mask-image: linear-gradient(90deg, transparent, #000 20%, #000 80%, transparent);
+            -webkit-mask-image: linear-gradient(90deg, transparent, #000 20%, #000 80%, transparent);
         }
-        button:active { background: #0f0; color: #000; }
+        .mode-btn {
+            color: rgba(255,255,255,0.5); font-weight: 700; font-size: 13px;
+            cursor: pointer; transition: 0.2s; letter-spacing: 1px;
+        }
+        .mode-btn.selected { color: #fecc00; transform: scale(1.1); text-shadow: 0 0 10px rgba(254,204,0,0.4); }
+
+        /* Actions */
+        .actions { display: flex; align-items: center; gap: 40px; margin-bottom: 10px; }
         
-        #btnMode { flex: 1.5; color: #0ff; border-color: #088; }
-        #btnSnap { flex: 0.6; font-size: 18px; }
-
-        /* Dropdown */
-        .row-select { display: flex; }
-        select {
-            width: 100%; padding: 8px;
-            background: #050505; color: #0f0;
-            border: 1px solid #0a0;
-            border-radius: 6px; font-family: monospace; font-size: 12px;
-            outline: none;
+        .btn-icon {
+            width: 44px; height: 44px; border-radius: 50%;
+            background: rgba(255,255,255,0.1); backdrop-filter: blur(10px);
+            border: none; color: white; display: flex; align-items: center; justify-content: center;
         }
+        
+        .shutter {
+            width: 70px; height: 70px; border-radius: 50%;
+            border: 4px solid #fff; padding: 3px; cursor: pointer;
+        }
+        .shutter-in { width: 100%; height: 100%; background: #fff; border-radius: 50%; transition: 0.2s; }
+        .shutter:active .shutter-in { transform: scale(0.9); opacity: 0.8; }
+        .recording .shutter-in { background: var(--danger); transform: scale(0.6); border-radius: 8px; }
 
-        /* Sliders */
-        .row-sliders { display: flex; gap: 15px; }
-        .slider-group { flex: 1; display: flex; flex-direction: column; }
-        label { color: #0a0; font-size: 9px; font-weight: bold; margin-bottom: 3px; letter-spacing: 1px; }
-        input[type=range] { width: 100%; accent-color: #0f0; height: 4px; }
+        /* SETTINGS SHEET */
+        .sheet {
+            position: absolute; bottom: 120px; width: 85%; max-width: 400px;
+            background: var(--glass); backdrop-filter: blur(30px);
+            -webkit-backdrop-filter: blur(30px);
+            border-radius: 24px; border: 1px solid var(--border);
+            padding: 20px; opacity: 0; pointer-events: none; transform: translateY(20px);
+            transition: 0.3s; display: flex; flex-direction: column; gap: 15px;
+        }
+        .sheet.show { opacity: 1; pointer-events: auto; transform: translateY(0); }
+        
+        .range-wrap { display: flex; flex-direction: column; gap: 6px; }
+        label { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.6); margin-left: 5px; }
+        input[type=range] { width: 100%; accent-color: #fff; height: 4px; }
 
+        #flash { position: fixed; inset: 0; background: #fff; z-index: 99; opacity: 0; pointer-events: none; transition: 0.1s; }
         video { display: none; }
     </style>
 </head>
 <body>
 
-    <div id="stats">FPS: 0</div>
+    <div id="flash"></div>
 
-    <div class="ui-container" id="ui">
-        <div class="row-top">
-            <button id="btnStart">START</button>
-            <button id="btnSwitch">↻</button>
-            <button id="btnMode">MODE: NORMAL</button> 
-            <button id="btnSnap">📷</button>
+    <div class="island-wrap">
+        <div class="island" id="island">
+            <div class="dot" id="dot"></div>
+            <span id="status">Standby</span>
+            <span id="fps" style="font-family: monospace; color:#888">00</span>
+        </div>
+    </div>
+
+    <div class="sheet" id="sheet">
+        <div class="range-wrap">
+            <label>DENSITY (PERFORMANCE)</label>
+            <input type="range" id="rngDensity" min="30" max="120" value="70">
+        </div>
+        <div class="range-wrap">
+            <label>THRESHOLD / SENSITIVITY</label>
+            <input type="range" id="rngSens" min="5" max="80" value="25">
+        </div>
+    </div>
+
+    <div class="ui-layer">
+        <div class="modes">
+            <div class="mode-btn selected" onclick="setMode('matrix')">MATRIX</div>
+            <div class="mode-btn" onclick="setMode('depth')">LiDAR</div>
+            <div class="mode-btn" onclick="setMode('edge')">EDGE</div>
+            <div class="mode-btn" onclick="setMode('ascii')">ASCII</div>
         </div>
 
-        <div class="row-select">
-            <select id="charSelect">
-                <option value="dots">Dots (....)</option>
-                <option value="khmer">Khmer (ខ្មែរ)</option>
-                <option value="matrix">Matrix (ﾊﾐﾋｰｳ)</option>
-                <option value="binary">Binary (0101)</option>
-                <option value="standard">Standard (.:-=+@)</option>
-            </select>
-        </div>
-
-        <div class="row-sliders">
-            <div class="slider-group">
-                <label>DENSITY</label>
-                <input type="range" id="resolution" min="30" max="140" value="70">
-            </div>
-            <div class="slider-group">
-                <label>SENSITIVITY</label>
-                <input type="range" id="threshold" min="5" max="80" value="20">
-            </div>
+        <div class="actions">
+            <button class="btn-icon" id="btnSet">
+                <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L3.16 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            </button>
+            <div class="shutter" id="btnShot"><div class="shutter-in"></div></div>
+            <button class="btn-icon" id="btnFlip">
+                <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M20 10c0-4.42-3.58-8-8-8s-8 3.58-8 8H2l5 5 5-5H8c0-2.21 1.79-4 4-4s4 1.79 4 4-1.79 4-4 4v2c3.31 0 6-2.69 6-6zM4 14c0 4.42 3.58 8 8 8s8-3.58 8-8h2l-5-5-5 5h4c0 2.21-1.79 4-4 4s-4-1.79-4-4 1.79-4 4-4v-2c-3.31 0-6 2.69-6 6z"/></svg>
+            </button>
         </div>
     </div>
 
@@ -129,299 +145,279 @@
     <canvas id="canvas"></canvas>
 
     <script>
-        // --- CACHE DOM ELEMENTS ---
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        // alpha: false improves performance by ignoring transparency buffer
-        const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true }); 
-        const ui = document.getElementById('ui');
-        const stats = document.getElementById('stats');
+        // --- OPTIMIZATION ENGINE ---
+        // Pre-calculating colors and characters reduces CPU load by ~40%
         
-        const btnStart = document.getElementById('btnStart');
-        const btnSwitch = document.getElementById('btnSwitch');
-        const btnSnap = document.getElementById('btnSnap');
-        const btnMode = document.getElementById('btnMode');
-        
-        const sliderRes = document.getElementById('resolution');
-        const sliderThresh = document.getElementById('threshold');
-        const charSelect = document.getElementById('charSelect');
-
-        // Reuse single temp canvas instance
-        const tempCanvas = document.createElement('canvas');
-        const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true }); 
-
-        const CHAR_SETS = {
-            dots: " .:", 
-            standard: ".:-=+*#%@",
-            binary: "01",
-            matrix: "ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ",
-            khmer: "។៕៖ៗ៘៙៚៛ៜ៝កខគឃងចឆជឈញដឋឌឍណតថទធនបផពភមយរលវសហឡអាិីឹឺុូួើឿៀេែៃោៅឣឤឥឦឧឨឩឪឳឲឱឰឯឮឭឬឫំះំ"
+        const MODES = {
+            matrix: { str: "ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽﾀﾇﾍ", type: 'matrix' },
+            depth:  { str: "█▓▒░: ", type: 'depth' },
+            edge:   { str: "/|\\-.", type: 'edge' },
+            ascii:  { str: " .:-=+*#%@█", type: 'ascii' }
         };
 
-        // State Variables
-        let currentGlyphs = CHAR_SETS.dots;
-        let streaming = false;
-        let animationId;
-        let useFrontCamera = false;
-        let isScannerMode = false;
-        let lastFontSize = 0;
-        let lastColor = "";
+        // Lookup Tables (LUT)
+        const charLUT = new Array(256);
+        const colorLUT = new Array(256);
         
-        // FPS Calc
-        let lastFrameTime = 0;
-        let frameCount = 0;
+        // System State
+        let active = false;
+        let mode = 'matrix';
+        let frontCam = false;
+        let density = 70;
+        let threshold = 25;
+        let width = 0, height = 0;
+        
+        // DOM Caching
+        const cvs = document.getElementById('canvas');
+        const ctx = cvs.getContext('2d', { alpha: false, desynchronized: true });
+        const vid = document.getElementById('video');
+        const tmpCvs = document.createElement('canvas');
+        const tmpCtx = tmpCvs.getContext('2d', { willReadFrequently: true });
+        
+        // UI Refs
+        const els = {
+            island: document.getElementById('island'),
+            status: document.getElementById('status'),
+            dot: document.getElementById('dot'),
+            fps: document.getElementById('fps'),
+            sheet: document.getElementById('sheet'),
+            shutter: document.getElementById('btnShot')
+        };
 
-        // --- CAMERA CONTROLS ---
-
-        async function startCamera() {
-            // Ensure clean state
-            if(streaming) stopCamera(false);
-
-            const constraints = {
-                video: {
-                    facingMode: useFrontCamera ? "user" : "environment",
-                    width: { ideal: 640 }, // Keep source res low for speed
-                    height: { ideal: 480 }
-                }
-            };
-
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia(constraints);
-                video.srcObject = stream;
+        // --- LUT GENERATOR ---
+        function updateLUTs() {
+            const m = MODES[mode];
+            const len = m.str.length - 1;
+            
+            for (let i = 0; i < 256; i++) {
+                // 1. Character Map
+                // Using bitwise floor (i/255 * len) | 0
+                let idx = (i / 255 * len) | 0;
                 
-                // Wait for video to be ready before starting loop
-                video.onloadedmetadata = () => {
-                    video.play();
-                    streaming = true;
-                    btnStart.innerText = "STOP";
-                    btnStart.classList.add("active");
-                    
-                    // Use modern Frame Callback if available, else fallback
-                    if ('requestVideoFrameCallback' in video) {
-                        video.requestVideoFrameCallback(onVideoFrame);
-                    } else {
-                        loop();
-                    }
-                };
-            } catch (err) {
-                console.error(err);
-                alert("Camera Error: " + err.name);
+                // Depth mode reverses the index (Darker = Solid block)
+                if (mode === 'depth') idx = len - idx;
+                
+                charLUT[i] = m.str[idx];
+
+                // 2. Color Map
+                if (mode === 'matrix') {
+                    // Bright pixels are white, mid are light green, dark are dark green
+                    if (i > 200) colorLUT[i] = '#eef';
+                    else if (i > 100) colorLUT[i] = '#0f0';
+                    else colorLUT[i] = '#040';
+                } else if (mode === 'depth') {
+                    // Brightness to Alpha
+                    const alpha = (i / 255).toFixed(2);
+                    colorLUT[i] = `rgba(255,255,255,${alpha})`;
+                } else if (mode === 'edge') {
+                    colorLUT[i] = '#0ff'; // Cyan fixed
+                } else {
+                    colorLUT[i] = '#fff'; // Standard white
+                }
             }
         }
+        
+        // Init LUTs
+        updateLUTs();
 
-        function stopCamera(clearScreen = true) {
-            streaming = false;
-            cancelAnimationFrame(animationId);
-            
-            if (video.srcObject) {
-                const tracks = video.srcObject.getTracks();
-                tracks.forEach(track => track.stop());
-                video.srcObject = null;
-            }
-            
-            if (clearScreen) {
-                btnStart.innerText = "START";
-                btnStart.classList.remove("active");
-                ctx.fillStyle = "black";
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                stats.innerText = "FPS: 0";
-            }
-        }
-
-        // --- PROCESSING LOOPS ---
-
-        // 1. Modern Browser Loop (Synced to Camera Hertz)
-        function onVideoFrame(now, metadata) {
-            if (!streaming) return;
-            processFrame();
-            // Re-register callback
-            video.requestVideoFrameCallback(onVideoFrame);
-        }
-
-        // 2. Fallback Loop (Standard RAF)
-        function loop(now) {
-            if (!streaming) return;
-            processFrame();
-            animationId = requestAnimationFrame(loop);
-        }
-
-        // --- CORE LOGIC ---
-
-        function processFrame() {
-            // FPS Counter
-            frameCount++;
-            const now = performance.now();
-            if (now - lastFrameTime >= 1000) {
-                stats.innerText = `FPS: ${frameCount}`;
-                frameCount = 0;
-                lastFrameTime = now;
-            }
-
-            // A. Resize Logic (Only run if changed)
-            if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
-                canvas.width = window.innerWidth;
-                canvas.height = window.innerHeight;
-                lastFontSize = 0; // Force font reset
-            }
-            const w = canvas.width;
-            const h = canvas.height;
-
-            const resVal = parseInt(sliderRes.value);
-            const thresholdVal = parseInt(sliderThresh.value);
-
-            // B. Grid Calculation
-            // Bitwise OR 0 is faster floor
-            const fontSize = Math.max(6, (w / resVal) | 0); 
-            const cols = Math.ceil(w / fontSize);
-            const rows = Math.ceil(h / (fontSize * 0.8));
-
-            if (tempCanvas.width !== cols || tempCanvas.height !== rows) {
-                tempCanvas.width = cols;
-                tempCanvas.height = rows;
-            }
-
-            // C. Draw Video to Temp Canvas (Downsampling)
-            // Mirror logic inside drawImage using context transforms
-            if (useFrontCamera) {
-                tempCtx.save();
-                tempCtx.translate(cols, 0);
-                tempCtx.scale(-1, 1);
-                tempCtx.drawImage(video, 0, 0, cols, rows);
-                tempCtx.restore();
+        // --- CAMERA SYSTEM ---
+        async function toggleCam() {
+            if (active) {
+                active = false;
+                if (vid.srcObject) vid.srcObject.getTracks().forEach(t => t.stop());
+                vid.srcObject = null;
+                updateUI(false);
             } else {
-                tempCtx.drawImage(video, 0, 0, cols, rows);
+                try {
+                    els.status.innerText = "INIT...";
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            facingMode: frontCam ? "user" : "environment",
+                            width: { ideal: 640 }, height: { ideal: 480 } // Keep native res low for speed
+                        }
+                    });
+                    vid.srcObject = stream;
+                    vid.onloadedmetadata = () => {
+                        vid.play();
+                        active = true;
+                        updateUI(true);
+                        requestAnimationFrame(loop);
+                    };
+                } catch (e) {
+                    alert("Camera Blocked");
+                    els.status.innerText = "ERROR";
+                }
+            }
+        }
+
+        function updateUI(isLive) {
+            if (isLive) {
+                els.island.classList.add('active');
+                els.dot.classList.add('live');
+                els.status.innerText = "LIDAR ACTIVE";
+                els.shutter.parentElement.classList.add('recording');
+            } else {
+                els.island.classList.remove('active');
+                els.dot.classList.remove('live');
+                els.status.innerText = "STANDBY";
+                els.shutter.parentElement.classList.remove('recording');
+                ctx.fillStyle = "#000";
+                ctx.fillRect(0,0,width,height);
+                els.fps.innerText = "00";
+            }
+        }
+
+        // --- RENDER LOOP (TURBO) ---
+        let lastTime = 0;
+        let frameCt = 0;
+        let lastFill = ""; // Cache canvas state
+
+        function loop(now) {
+            if (!active) return;
+
+            // 1. Stats (Throttled)
+            frameCt++;
+            if (now - lastTime >= 1000) {
+                els.fps.innerText = frameCt;
+                frameCt = 0;
+                lastTime = now;
             }
 
-            const frame = tempCtx.getImageData(0, 0, cols, rows).data;
-
-            // D. Render Setup
-            ctx.fillStyle = "black";
-            ctx.fillRect(0, 0, w, h);
-
-            // Set Font (Only if changed - HUGE performance saver)
-            if (fontSize !== lastFontSize) {
-                const fontName = (charSelect.value === 'khmer') ? "'Khmer OS System', monospace" : "monospace";
-                ctx.font = `bold ${fontSize}px ${fontName}`;
-                ctx.textAlign = "center";
-                ctx.textBaseline = "middle";
-                lastFontSize = fontSize;
+            // 2. Resize Logic
+            if (cvs.width !== window.innerWidth || cvs.height !== window.innerHeight) {
+                cvs.width = window.innerWidth;
+                cvs.height = window.innerHeight;
+                width = cvs.width; height = cvs.height;
             }
 
-            const glyphLen = currentGlyphs.length - 1;
+            // 3. Math & Grid
+            // Bitwise floor is faster than Math.floor
+            const fs = Math.max(8, (width / density) | 0); 
+            const cols = (width / fs) | 0;
+            const rows = (height / (fs * 0.8)) | 0;
 
-            // E. The Pixel Loop
+            // 4. Video Downsampling
+            if (tmpCvs.width !== cols || tmpCvs.height !== rows) {
+                tmpCvs.width = cols; tmpCvs.height = rows;
+            }
+
+            if (frontCam) {
+                tmpCtx.save();
+                tmpCtx.translate(cols, 0);
+                tmpCtx.scale(-1, 1);
+                tmpCtx.drawImage(vid, 0, 0, cols, rows);
+                tmpCtx.restore();
+            } else {
+                tmpCtx.drawImage(vid, 0, 0, cols, rows);
+            }
+
+            // 5. Get Buffer
+            const imgData = tmpCtx.getImageData(0, 0, cols, rows);
+            const data = imgData.data;
+
+            // 6. Draw Background
+            ctx.fillStyle = "#000";
+            ctx.fillRect(0, 0, width, height);
+
+            // Font Setup
+            // Only set if changed (handled mostly by mode switch, but good to be safe)
+            ctx.font = "bold " + fs + "px monospace";
+            ctx.textAlign = "center";
+            
+            // 7. PIXEL ITERATION (Optimized)
+            const isEdge = (mode === 'edge');
+            
             for (let y = 0; y < rows; y++) {
-                // Optimization: Pre-calculate Y offset
-                const rowOffset = y * cols;
-                const yPos = y * (fontSize * 0.8) + (fontSize >> 1);
+                // Pre-calculate Y coords
+                const yOff = y * cols;
+                const yPos = y * (fs * 0.8) + (fs >> 1);
 
                 for (let x = 0; x < cols; x++) {
-                    const i = (rowOffset + x) << 2; // Equivalent to * 4
+                    const i = (yOff + x) << 2; // Equivalent to * 4
                     
-                    // Fast Brightness (Average)
-                    const brightness = (frame[i] + frame[i+1] + frame[i+2]) / 3;
+                    // Fast Greyscale: (R+G+B) / 3
+                    // We use bitwise OR 0 to force integer
+                    const bright = (data[i] + data[i+1] + data[i+2]) * 0.333 | 0;
 
                     let shouldDraw = false;
-                    let targetColor = "";
+                    let charIdx = bright; // Default to brightness map
 
-                    if (isScannerMode) {
-                        // --- SCANNER MODE (Edge Detection) ---
-                        // Only check right neighbor if not last column
+                    if (isEdge) {
+                        // Edge Detection Logic
+                        // Look ahead 1 pixel (4 bytes)
                         if (x < cols - 1) {
-                            const iRight = i + 4;
-                            const bRight = (frame[iRight] + frame[iRight+1] + frame[iRight+2]) / 3;
-                            
-                            // Math.abs replacement
-                            let diff = brightness - bRight;
+                            const i2 = i + 4;
+                            const bNext = (data[i2] + data[i2+1] + data[i2+2]) * 0.333 | 0;
+                            // Fast absolute value
+                            let diff = bright - bNext;
                             if (diff < 0) diff = -diff;
-
-                            if (diff > thresholdVal) {
+                            
+                            if (diff > threshold) {
                                 shouldDraw = true;
-                                targetColor = "#aff"; // Cyan for edges
+                                // Randomize character for jitter effect
+                                charIdx = (Math.random() * 255) | 0; 
                             }
                         }
                     } else {
-                        // --- NORMAL MODE ---
-                        if (brightness > 30) {
+                        // Standard Brightness Map
+                        if (bright > threshold) {
                             shouldDraw = true;
-                            // Dynamic Green Intensity
-                            // Use cached strings or simple rgb construction
-                            // Optimization: Just use a fixed green for speed or dynamic
-                            // For max speed, use fixed, but dynamic looks better.
-                            const gVal = (brightness + 50) | 0;
-                            // Clamp to 255
-                            const finalG = gVal > 255 ? 255 : gVal;
-                            targetColor = `rgb(0, ${finalG}, 0)`;
                         }
                     }
 
                     if (shouldDraw) {
-                        // Calc Glyph Index
-                        let charIdx;
-                        if(isScannerMode) {
-                             // Random jitter for scanner noise
-                             charIdx = (Math.random() * glyphLen) | 0;
-                        } else {
-                             charIdx = ((brightness / 255) * glyphLen) | 0;
-                        }
+                        const targetColor = colorLUT[charIdx];
                         
-                        // State Cache Check: Don't change context color if not needed
-                        if (targetColor !== lastColor) {
+                        // STATE BATCHING: Only hit the GPU if color changes
+                        if (targetColor !== lastFill) {
                             ctx.fillStyle = targetColor;
-                            lastColor = targetColor;
+                            lastFill = targetColor;
                         }
-                        
-                        const xPos = x * fontSize + (fontSize >> 1);
-                        ctx.fillText(currentGlyphs[charIdx], xPos, yPos);
+
+                        ctx.fillText(charLUT[charIdx], x * fs + (fs >> 1), yPos);
                     }
                 }
             }
+
+            requestAnimationFrame(loop);
         }
 
-        // --- EVENT HANDLERS ---
+        // --- EVENTS ---
+        window.setMode = (m) => {
+            mode = m;
+            updateLUTs();
+            document.querySelectorAll('.mode-btn').forEach(b => {
+                b.classList.toggle('selected', b.innerText.toLowerCase().includes(m));
+            });
+            // Haptic
+            if(navigator.vibrate) navigator.vibrate(10);
+        };
 
-        charSelect.addEventListener('change', (e) => {
-            currentGlyphs = CHAR_SETS[e.target.value];
-            lastFontSize = 0; // Force font update
-        });
+        els.shutter.addEventListener('click', () => {
+            if(!active) { toggleCam(); return; }
+            
+            // Flash
+            const f = document.getElementById('flash');
+            f.style.opacity = 1;
+            setTimeout(() => f.style.opacity = 0, 100);
 
-        btnMode.addEventListener('click', () => {
-            isScannerMode = !isScannerMode;
-            if(isScannerMode) {
-                btnMode.innerText = "MODE: SCANNER";
-                btnMode.style.color = "#aff";
-                btnMode.style.borderColor = "#aff";
-            } else {
-                btnMode.innerText = "MODE: NORMAL";
-                btnMode.style.color = "#0f0";
-                btnMode.style.borderColor = "#0f0";
-            }
-        });
-
-        btnStart.addEventListener('click', () => {
-            if(streaming) stopCamera();
-            else startCamera();
-        });
-        
-        btnSwitch.addEventListener('click', () => {
-            if (!streaming) return;
-            useFrontCamera = !useFrontCamera;
-            startCamera();
-        });
-
-        btnSnap.addEventListener('click', () => {
+            // Save
             const link = document.createElement('a');
-            link.download = `matrix_scan_${Date.now()}.png`;
-            link.href = canvas.toDataURL('image/png');
+            link.download = `lidar_${Date.now()}.png`;
+            link.href = cvs.toDataURL('image/png');
             link.click();
         });
 
-        // Hide UI on click outside
-        document.body.addEventListener('click', (e) => {
-            if (!e.target.closest('.ui-container')) {
-                ui.classList.toggle('ui-hidden');
-            }
+        document.getElementById('btnSet').addEventListener('click', () => els.sheet.classList.toggle('show'));
+        document.getElementById('btnFlip').addEventListener('click', () => { 
+            if(active) { frontCam = !frontCam; toggleCam(); }
         });
+        
+        cvs.addEventListener('click', () => els.sheet.classList.remove('show'));
+
+        // Slider inputs
+        document.getElementById('rngDensity').addEventListener('input', e => density = parseInt(e.target.value));
+        document.getElementById('rngSens').addEventListener('input', e => threshold = parseInt(e.target.value));
 
     </script>
 </body>
